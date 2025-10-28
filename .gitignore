@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# SQLite DB (optional: keep locally)
+shop.db
+
+# Node / Frontend
+node_modules/
+dist/
+.ecommerce-frontend/**/node_modules/
+ecommerce-frontend/node_modules/
+ecommerce-frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
