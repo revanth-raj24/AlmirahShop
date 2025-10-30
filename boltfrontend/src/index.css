@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+body {
+  background-color: #F5F5F0;
+  color: #2C2C2C;
+  font-family: Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Crimson Text', Georgia, serif;
+}
+
+.btn-primary {
+  background-color: #2C2C2C;
+  color: #F5F5F0;
+  padding: 0.75rem 2rem;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all 300ms;
+}
+
+.btn-primary:hover {
+  background-color: #8B7E74;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  border: 1px solid #2C2C2C;
+  color: #2C2C2C;
+  background-color: transparent;
+  padding: 0.75rem 2rem;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all 300ms;
+}
+
+.btn-secondary:hover {
+  background-color: #2C2C2C;
+  color: #F5F5F0;
+}
