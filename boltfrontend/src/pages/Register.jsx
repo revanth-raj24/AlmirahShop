@@ -12,6 +12,7 @@ export default function Register() {
   const [formData, setFormData] = useState({
     email: '',
     username: '',
+    phone: '',
     password: '',
     confirmPassword: '',
   });
@@ -29,6 +30,10 @@ export default function Register() {
       newErrors.username = 'Username is required';
     } else if (formData.username.length < 3) {
       newErrors.username = 'Username must be at least 3 characters';
+    }
+
+    if (formData.phone && !/^\+?[0-9\-\s]{7,15}$/.test(formData.phone)) {
+      newErrors.phone = 'Phone is invalid';
     }
 
     if (!formData.password) {
@@ -51,7 +56,7 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await signUp({ username: formData.username, email: formData.email, password: formData.password });
+      await signUp({ username: formData.username, email: formData.email, password: formData.password, phone: formData.phone || undefined });
       alert('Registration successful! Please login.');
       navigate('/login');
     } catch (error) {
@@ -93,6 +98,15 @@ export default function Register() {
             onChange={handleChange}
             error={errors.username}
             required
+          />
+
+          <Input
+            label="Phone (optional)"
+            name="phone"
+            value={formData.phone}
+            onChange={handleChange}
+            error={errors.phone}
+            placeholder="e.g. +1 555 123 4567"
           />
 
           <Input

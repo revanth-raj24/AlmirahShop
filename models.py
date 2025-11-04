@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -8,8 +8,12 @@ class Product(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    image_url = Column(String, nullable=True)
     price = Column(Float, nullable=False)
-    in_stock = Column(Boolean, default=True)
+    discounted_price = Column(Float, nullable=True)
+    gender = Column(String, nullable=True, index=True)
+    category = Column(String, nullable=True, index=True)
 
 class User(Base):
     __tablename__ = "users"
@@ -17,6 +21,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
+    phone = Column(String, unique=True, index=True, nullable=True)
     hashed_password = Column(String)
     is_admin = Column(Boolean, default=False)
     # One-to-many: a user can have many cart items

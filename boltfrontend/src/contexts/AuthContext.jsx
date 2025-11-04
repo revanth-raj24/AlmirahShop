@@ -24,8 +24,8 @@ export function AuthProvider({ children }) {
     setLoading(false);
   }, []);
 
-  const signUp = async ({ username, email, password }) => {
-    const payload = { username, email, password };
+  const signUp = async ({ username, email, password, phone }) => {
+    const payload = { username, email, password, phone };
     const { data } = await API.post('/users/signup', payload);
     return data;
   };
