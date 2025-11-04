@@ -1,31 +1,55 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Literal
 from datetime import datetime
 
 class ProductBase(BaseModel):
     name: str
+    description: str | None = None
+    image_url: str | None = None
     price: float
-    in_stock: bool
+    discounted_price: float | None = None
+    gender: Literal['men','women','unisex'] | None = None
+    category: str | None = None
 
 class ProductCreate(ProductBase):
     pass
 
-class ProductResponse(ProductBase):
+class Product(BaseModel):
     id: int
+    name: str
+    description: str | None = None
+    image_url: str | None = None
+    price: float
+    discounted_price: float | None = None
+    gender: Literal['men','women','unisex'] | None = None
+    category: str | None = None
 
     class Config:
-         from_attributes = True
+        from_attributes = True
+
+class ProductListResponse(BaseModel):
+    items: List[Product]
+    total: int
+    page: int
+    page_size: int
+
+class ProductBulkUpdate(BaseModel):
+    product_ids: List[int]
+    gender: Literal['men','women','unisex'] | None = None
+    category: str | None = None
 
 # User-related schemas
 class UserCreate(BaseModel):
     username: str
     email: str
+    phone: str | None = None
     password: str
 
 class UserResponse(BaseModel):
     id: int
     username: str
     email: str
+    phone: str | None = None
 
     class Config:
         from_attributes = True

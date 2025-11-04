@@ -1,10 +1,12 @@
 import { Heart, ShoppingCart } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 export default function ProductCard({ product, onAddToCart, onToggleWishlist, isInWishlist }) {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const navigate = useNavigate();
   const hasDiscount =
     typeof product.discounted_price === 'number' &&
     typeof product.price === 'number' &&
@@ -34,8 +36,8 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
   const description = product.description || '';
 
   return (
-    <div className="group cursor-pointer">
-      <div className="relative overflow-hidden bg-neutral-100 aspect-[3/4] mb-4">
+    <div className="group cursor-pointer" onClick={() => navigate(`/product/${product.id}`)}>
+      <div className="relative overflow-hidden bg-neutral-100 aspect-[3/4] mb-4" onClick={e => e.stopPropagation()}>
         <img
           src={imageUrl}
           alt={product.name}

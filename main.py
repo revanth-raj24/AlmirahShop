@@ -3,11 +3,17 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from database import Base, engine, SessionLocal
-from models import Product, User, Order, OrderItem, CartItem
-from schemas import ProductCreate, ProductResponse, UserCreate, UserResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse
+from models import Product as ProductModel, User, Order, OrderItem, CartItem
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, ProductBulkUpdate, UserCreate, UserResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("fastecom")
 
 TAGS_METADATA = [
     {"name": "Products", "description": "Manage products catalog."},
@@ -26,13 +32,39 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 # Create all tables in DB
 Base.metadata.create_all(bind=engine)
+
+# Lightweight migration: add missing columns to products and backfill defaults
+def ensure_product_columns():
+    with engine.connect() as conn:
+        # discover existing columns
+        result = conn.execute(text("PRAGMA table_info(products)"))
+        existing = {row[1] for row in result.fetchall()}
+        to_add = []
+        if 'gender' not in existing:
+            to_add.append("ALTER TABLE products ADD COLUMN gender TEXT")
+        if 'category' not in existing:
+            to_add.append("ALTER TABLE products ADD COLUMN category TEXT")
+        for stmt in to_add:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                # if already exists due to race, ignore
+                pass
+        # backfill defaults for NULLs
+        try:
+            conn.execute(text("UPDATE products SET gender = COALESCE(gender, 'unisex')"))
+            conn.execute(text("UPDATE products SET category = COALESCE(category, 'general')"))
+        except Exception:
+            logger.exception("Backfill failed for products gender/category")
+
+ensure_product_columns()
 
 # Dependency to get DB session
 def get_db():
@@ -43,23 +75,51 @@ def get_db():
         db.close()
 
 # Create Product
-@app.post("/products", response_model=ProductResponse, tags=["Products"])
+@app.post("/products", response_model=ProductSchema, tags=["Products"])
 def create_product(product: ProductCreate, db: Session = Depends(get_db)):
-    new_product = Product(**product.model_dump())  # Changed from .dict()
+    new_product = ProductModel(**product.model_dump())
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
     return new_product
 
 # Get All Products
-@app.get("/products", response_model=list[ProductResponse], tags=["Products"])
-def get_products(db: Session = Depends(get_db)):
-    return db.query(Product).all()
+@app.get("/products", response_model=list[ProductSchema], tags=["Products"])
+def get_products(
+    db: Session = Depends(get_db),
+    gender: str | None = Query(None, description="Filter by gender: men/women/unisex")
+):
+    try:
+        query = db.query(ProductModel)
+        if gender:
+            query = query.filter(ProductModel.gender == gender)
+        return query.order_by(ProductModel.id.desc()).all()
+    except Exception:
+        logger.exception("Failed to fetch products")
+        raise HTTPException(status_code=500, detail="Failed to fetch products")
 
-# Get Single Product
-@app.get("/products/{product_id}", response_model=ProductResponse, tags=["Products"])
+@app.get("/products/paginated", response_model=ProductListResponse, tags=["Products"])
+def get_products_paginated(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(12, ge=1, le=60),
+    gender: str | None = Query(None, description="Filter by gender: men/women/unisex"),
+    db: Session = Depends(get_db)
+):
+    try:
+        base = db.query(ProductModel)
+        if gender:
+            base = base.filter(ProductModel.gender == gender)
+        total = base.count()
+        offset = (page - 1) * page_size
+        items = base.order_by(ProductModel.id.desc()).limit(page_size).offset(offset).all()
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    except Exception:
+        logger.exception("Failed to fetch paginated products")
+        raise HTTPException(status_code=500, detail="Failed to fetch products")
+
+@app.get("/products/{product_id}", response_model=ProductSchema, tags=["Products"])
 def get_product(product_id: int, db: Session = Depends(get_db)):
-    product = db.query(Product).filter(Product.id == product_id).first()
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
@@ -67,7 +127,7 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 # Delete Product
 @app.delete("/products/{product_id}", tags=["Products"])
 def delete_product(product_id: int, db: Session = Depends(get_db)):
-    product = db.query(Product).filter(Product.id == product_id).first()
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -81,21 +141,65 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 # Register User
 @app.post("/users/signup", response_model=UserResponse, tags=["Users"])
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    logger.info("Signup attempt: username=%s email=%s phone_present=%s", user.username, user.email, bool(user.phone))
+    try:
+        # Normalize phone: treat empty strings as None
+        normalized_phone = None
+        if user.phone is not None:
+            stripped = user.phone.strip()
+            if stripped:
+                normalized_phone = stripped
 
-    hashed_pw = hash_password(user.password)
-    new_user = User(username=user.username, email=user.email, hashed_password=hashed_pw)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
+        # Ensure unique username/email/phone
+        if db.query(User).filter(User.username == user.username).first():
+            logger.info("Signup rejected: username already exists: %s", user.username)
+            raise HTTPException(status_code=400, detail="Username already registered")
+        if db.query(User).filter(User.email == user.email).first():
+            logger.info("Signup rejected: email already exists: %s", user.email)
+            raise HTTPException(status_code=400, detail="Email already registered")
+        if normalized_phone and db.query(User).filter(User.phone == normalized_phone).first():
+            logger.info("Signup rejected: phone already exists: %s", normalized_phone)
+            raise HTTPException(status_code=400, detail="Phone already registered")
+
+        hashed_pw = hash_password(user.password)
+        new_user = User(username=user.username, email=user.email, phone=normalized_phone, hashed_password=hashed_pw)
+        db.add(new_user)
+        try:
+            db.commit()
+        except IntegrityError as e:
+            db.rollback()
+            # Best-effort mapping of constraint failures to user-friendly messages
+            message = "Duplicate value for a unique field"
+            detail = str(e.orig).lower() if hasattr(e, 'orig') else str(e).lower()
+            logger.warning("IntegrityError on signup: %s", detail)
+            if 'username' in detail:
+                message = 'Username already registered'
+            elif 'email' in detail:
+                message = 'Email already registered'
+            elif 'phone' in detail:
+                message = 'Phone already registered'
+            raise HTTPException(status_code=400, detail=message)
+
+        db.refresh(new_user)
+        logger.info("Signup success: user_id=%s username=%s", new_user.id, new_user.username)
+        return new_user
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error during signup")
+        raise HTTPException(status_code=500, detail="Signup failed due to server error")
 
 # Login User
 @app.post("/users/login",tags=["Auth"])
 def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()
+    identifier = form_data.username  # may be username, email, or phone
+    user = (
+        db.query(User)
+        .filter(
+            (User.username == identifier) | (User.email == identifier) | (User.phone == identifier)
+        )
+        .first()
+    )
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -118,7 +222,7 @@ def add_to_cart(
     user = db.query(User).filter(User.username == current_user).first()
 
     # Check if product exists
-    product = db.query(Product).filter(Product.id == item.product_id).first()
+    product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
@@ -285,7 +389,7 @@ def create_order(db: Session = Depends(get_db), current_user: str = Depends(get_
     total = 0.0
     for ci in cart_items:
         # fetch product to get current price (and validate existence)
-        product = db.query(Product).filter(Product.id == ci.product_id).first()
+        product = db.query(ProductModel).filter(ProductModel.id == ci.product_id).first()
         if not product:
             # optional: skip or abort; here we abort to keep consistency
             raise HTTPException(status_code=404, detail=f"Product id {ci.product_id} not found")
@@ -333,22 +437,47 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = 
 
     return order
 
-@app.get("/products/search", response_model=list[ProductResponse])
+@app.get("/products/search", response_model=list[ProductSchema], tags=["Products"])
 def search_products(
     name: str | None = Query(None, description="Search by name"),
     min_price: float | None = Query(None, description="Minimum price"),
     max_price: float | None = Query(None, description="Maximum price"),
+    gender: str | None = Query(None, description="Filter by gender: men/women/unisex"),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Product)
+    query = db.query(ProductModel)
 
     if name:
-        query = query.filter(Product.name.ilike(f"%{name}%"))
+        query = query.filter(ProductModel.name.ilike(f"%{name}%"))
     if min_price is not None:
-        query = query.filter(Product.price >= min_price)
+        query = query.filter(ProductModel.price >= min_price)
     if max_price is not None:
-        query = query.filter(Product.price <= max_price)
+        query = query.filter(ProductModel.price <= max_price)
+    if gender:
+        query = query.filter(ProductModel.gender == gender)
 
-    results = query.all()
+    results = query.order_by(ProductModel.id.desc()).all()
     return results
+
+@app.post("/products/bulk-update", response_model=dict, tags=["Products"])
+def bulk_update_products(payload: ProductBulkUpdate, db: Session = Depends(get_db)):
+    if not payload.product_ids:
+        raise HTTPException(status_code=400, detail="product_ids cannot be empty")
+    updates: dict = {}
+    if payload.gender is not None:
+        updates['gender'] = payload.gender
+    if payload.category is not None:
+        updates['category'] = payload.category
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update. Provide gender and/or category")
+
+    try:
+        q = db.query(ProductModel).filter(ProductModel.id.in_(payload.product_ids))
+        count = q.update(updates, synchronize_session=False)
+        db.commit()
+        return {"updated": count}
+    except Exception:
+        db.rollback()
+        logger.exception("Bulk update failed")
+        raise HTTPException(status_code=500, detail="Failed to update products")
 

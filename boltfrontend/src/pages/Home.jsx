@@ -10,26 +10,40 @@ export default function Home() {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const pageSize = 12;
   const [searchParams] = useSearchParams();
   const category = searchParams.get('category');
   const searchQuery = searchParams.get('search');
 
+  const gender = category && ['men','women','unisex'].includes(category.toLowerCase())
+    ? category.toLowerCase()
+    : undefined;
+
+  useEffect(() => {
+    setPage(1); // reset to first page when filters change
+  }, [category, searchQuery]);
+
   useEffect(() => {
     fetchProducts();
-  }, [category, searchQuery]);
+  }, [gender, searchQuery, page]);
 
   const fetchProducts = async () => {
     setLoading(true);
     try {
       if (searchQuery) {
-        const { data } = await API.get('/products/search', { params: { name: searchQuery } });
+        const { data } = await API.get('/products/search', { params: { name: searchQuery, gender } });
         setProducts(data || []);
+        setTotal((data || []).length);
       } else {
-        const { data } = await API.get('/products');
-        setProducts(data || []);
+        const { data } = await API.get('/products/paginated', { params: { page, page_size: pageSize, gender } });
+        setProducts(data?.items || []);
+        setTotal(data?.total || 0);
       }
     } catch (_) {
       setProducts([]);
+      setTotal(0);
     }
     setLoading(false);
   };
@@ -48,8 +62,10 @@ export default function Home() {
     }
   };
 
-  const featuredProducts = products.slice(0, 8);
-  const newArrivals = products.slice(0, 4);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const canPrev = page > 1;
+  const canNext = page < totalPages;
+
   const videoProduct = null; // not available from backend
 
   if (loading) {
@@ -82,27 +98,12 @@ export default function Home() {
         </div>
       )}
 
-      {!searchQuery && newArrivals.length > 0 && (
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-          <h2 className="font-serif text-4xl text-neutral-900 mb-12 text-center">New Arrivals</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-            {newArrivals.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onAddToCart={handleAddToCart}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
         <h2 className="font-serif text-4xl text-neutral-900 mb-12 text-center">
           {category ? `${category.charAt(0).toUpperCase() + category.slice(1)}'s Collection` : 'Featured Collection'}
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-          {(category ? products : featuredProducts).map((product, index) => {
+          {products.map((product, index) => {
             if (!searchQuery && index === 2 && videoProduct && !category) {
               return (
                 <div key="video-tile">
@@ -119,6 +120,26 @@ export default function Home() {
             );
           })}
         </div>
+
+        {!searchQuery && (
+          <div className="flex items-center justify-center gap-4 mt-12">
+            <button
+              className="px-4 py-2 border border-neutral-300 text-neutral-700 disabled:opacity-50"
+              onClick={() => canPrev && setPage((p) => p - 1)}
+              disabled={!canPrev}
+            >
+              Previous
+            </button>
+            <span className="text-neutral-700">Page {page} of {totalPages}</span>
+            <button
+              className="px-4 py-2 border border-neutral-300 text-neutral-700 disabled:opacity-50"
+              onClick={() => canNext && setPage((p) => p + 1)}
+              disabled={!canNext}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );
