@@ -12,6 +12,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [wishlistStatus, setWishlistStatus] = useState(new Set());
   const pageSize = 12;
   const [searchParams] = useSearchParams();
   const category = searchParams.get('category');
@@ -29,23 +30,85 @@ export default function Home() {
     fetchProducts();
   }, [gender, searchQuery, page]);
 
+  useEffect(() => {
+    if (user && products.length > 0) {
+      fetchWishlistStatus();
+    } else {
+      setWishlistStatus(new Set());
+    }
+  }, [user, products]);
+
   const fetchProducts = async () => {
     setLoading(true);
     try {
       if (searchQuery) {
-        const { data } = await API.get('/products/search', { params: { name: searchQuery, gender } });
-        setProducts(data || []);
-        setTotal((data || []).length);
+        const params = { name: searchQuery };
+        if (gender) params.gender = gender;
+        const response = await API.get('/products/search', { params });
+        const data = response?.data || [];
+        console.log('Search products fetched:', data.length);
+        setProducts(data);
+        setTotal(data.length);
       } else {
-        const { data } = await API.get('/products/paginated', { params: { page, page_size: pageSize, gender } });
+        const params = { page, page_size: pageSize };
+        if (gender) params.gender = gender;
+        const response = await API.get('/products/paginated', { params });
+        const data = response?.data || {};
+        console.log('Paginated products fetched:', data?.items?.length || 0, 'total:', data?.total || 0);
         setProducts(data?.items || []);
         setTotal(data?.total || 0);
       }
-    } catch (_) {
+    } catch (err) {
+      console.error('Failed to fetch products:', err);
+      console.error('Error details:', err?.response?.data || err?.message);
       setProducts([]);
       setTotal(0);
     }
     setLoading(false);
+  };
+
+  const fetchWishlistStatus = async () => {
+    if (!user) return;
+    try {
+      const statusPromises = products.map(async (product) => {
+        try {
+          const { data } = await API.get(`/wishlist/check/${product.id}`);
+          return { productId: product.id, inWishlist: data?.in_wishlist || false };
+        } catch {
+          return { productId: product.id, inWishlist: false };
+        }
+      });
+      const results = await Promise.all(statusPromises);
+      const wishlistSet = new Set(results.filter(r => r.inWishlist).map(r => r.productId));
+      setWishlistStatus(wishlistSet);
+    } catch (err) {
+      console.error('Failed to fetch wishlist status:', err);
+    }
+  };
+
+  const handleToggleWishlist = async (productId) => {
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
+    const isInWishlist = wishlistStatus.has(productId);
+    try {
+      if (isInWishlist) {
+        await API.delete(`/wishlist/remove/${productId}`);
+        setWishlistStatus((prev) => {
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+      } else {
+        await API.post(`/wishlist/add/${productId}`);
+        setWishlistStatus((prev) => new Set(prev).add(productId));
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to update wishlist';
+      alert(msg);
+    }
   };
 
   const handleAddToCart = async (product) => {
@@ -102,24 +165,35 @@ export default function Home() {
         <h2 className="font-serif text-4xl text-neutral-900 mb-12 text-center">
           {category ? `${category.charAt(0).toUpperCase() + category.slice(1)}'s Collection` : 'Featured Collection'}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-          {products.map((product, index) => {
-            if (!searchQuery && index === 2 && videoProduct && !category) {
+        {products.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-neutral-600 text-lg mb-4">No products found</p>
+            <p className="text-neutral-500 text-sm">
+              {category ? `Try a different category or check back later.` : 'Check back later for new arrivals.'}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            {products.map((product, index) => {
+              if (!searchQuery && index === 2 && videoProduct && !category) {
+                return (
+                  <div key="video-tile">
+                    <VideoProductCard product={videoProduct} />
+                  </div>
+                );
+              }
               return (
-                <div key="video-tile">
-                  <VideoProductCard product={videoProduct} />
-                </div>
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onAddToCart={handleAddToCart}
+                  onToggleWishlist={handleToggleWishlist}
+                  isInWishlist={wishlistStatus.has(product.id)}
+                />
               );
-            }
-            return (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onAddToCart={handleAddToCart}
-              />
-            );
-          })}
-        </div>
+            })}
+          </div>
+        )}
 
         {!searchQuery && (
           <div className="flex items-center justify-center gap-4 mt-12">

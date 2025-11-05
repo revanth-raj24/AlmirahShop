@@ -22,10 +22,14 @@ export default function Navbar() {
 
   const fetchCounts = async () => {
     try {
-      const { data } = await API.get('/cart');
-      const count = (data || []).reduce((sum, item) => sum + (item.quantity || 0), 0);
-      setCartCount(count);
-      setWishlistCount(0);
+      const [{ data: cart }, { data: wishlist }] = await Promise.all([
+        API.get('/cart').catch(() => ({ data: [] })),
+        API.get('/wishlist').catch(() => ({ data: [] })),
+      ]);
+      const cartCount = (cart || []).reduce((sum, item) => sum + (item.quantity || 0), 0);
+      const wishlistCount = (wishlist || []).length;
+      setCartCount(cartCount);
+      setWishlistCount(wishlistCount);
     } catch (_) {
       setCartCount(0);
       setWishlistCount(0);
@@ -49,7 +53,7 @@ export default function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-20">
           <Link to="/" className="font-serif text-2xl text-neutral-900 tracking-tight">
-            ATELIER
+            The Almirah Shop
           </Link>
 
           <div className="hidden md:flex items-center gap-8">

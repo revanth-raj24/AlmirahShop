@@ -7,7 +7,7 @@ export default function Footer() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
           <div>
-            <h3 className="font-serif text-2xl mb-6">ATELIER</h3>
+            <h3 className="font-serif text-2xl mb-6">The Almirah Shop</h3>
             <p className="text-neutral-50/70 text-sm leading-relaxed">
               Timeless elegance, crafted with care. Discover luxury clothing that transcends trends.
             </p>
@@ -91,7 +91,7 @@ export default function Footer() {
         </div>
 
         <div className="mt-12 pt-8 border-t border-neutral-50/20 text-center text-neutral-50/60 text-sm">
-          <p>&copy; {new Date().getFullYear()} ATELIER. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} The Almirah Shop. All rights reserved.</p>
         </div>
       </div>
     </footer>

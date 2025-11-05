@@ -1,12 +1,18 @@
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import API from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
+import { Heart } from 'lucide-react';
 
 export default function ProductDetails() {
   const { productId } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isInWishlist, setIsInWishlist] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -23,6 +29,80 @@ export default function ProductDetails() {
     };
     fetchProduct();
   }, [productId]);
+
+  useEffect(() => {
+    if (user && productId) {
+      checkWishlistStatus();
+    }
+  }, [user, productId]);
+
+  const checkWishlistStatus = async () => {
+    if (!user) return;
+    try {
+      const { data } = await API.get(`/wishlist/check/${productId}`);
+      setIsInWishlist(data?.in_wishlist || false);
+    } catch {
+      setIsInWishlist(false);
+    }
+  };
+
+  const handleToggleWishlist = async () => {
+    if (!user) {
+      const returnUrl = `/product/${productId}`;
+      navigate(`/login?message=Please%20login%20to%20add%20items%20to%20wishlist&returnUrl=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+
+    setWishlistLoading(true);
+    try {
+      if (isInWishlist) {
+        await API.delete(`/wishlist/remove/${productId}`);
+        setIsInWishlist(false);
+      } else {
+        await API.post(`/wishlist/add/${productId}`);
+        setIsInWishlist(true);
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to update wishlist';
+      alert(msg);
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
+
+  const handleAddToCart = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      const returnUrl = `/product/${product.id}`;
+      navigate(`/login?message=Please%20login%20to%20add%20items%20to%20cart&returnUrl=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+
+    try {
+      await API.post('/cart/add', { product_id: product.id, quantity: 1 });
+      alert('Added to cart!');
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to add to cart';
+      alert(msg);
+    }
+  };
+
+  const handleOrderNow = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      const returnUrl = `/product/${product.id}`;
+      navigate(`/login?message=Please%20login%20to%20place%20an%20order&returnUrl=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+
+    try {
+      await API.post('/cart/add', { product_id: product.id, quantity: 1 });
+      navigate('/cart');
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to add to cart';
+      alert(msg);
+    }
+  };
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -51,6 +131,28 @@ export default function ProductDetails() {
             )}
           </div>
           <p className="mb-6 text-neutral-700">{product.description}</p>
+
+          <div className="flex items-center gap-4 mt-8">
+            <button
+              onClick={handleToggleWishlist}
+              disabled={wishlistLoading}
+              className={`px-5 py-2.5 border transition-colors flex items-center gap-2 ${
+                isInWishlist
+                  ? 'border-red-600 text-red-600 bg-red-50 hover:bg-red-100'
+                  : 'border-neutral-300 text-neutral-700 hover:border-neutral-900'
+              } disabled:opacity-50`}
+              title={isInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+            >
+              <Heart className={`w-5 h-5 ${isInWishlist ? 'fill-red-600' : ''}`} />
+              {isInWishlist ? 'In Wishlist' : 'Add to Wishlist'}
+            </button>
+            <button onClick={handleAddToCart} className="px-5 py-2.5 bg-neutral-900 text-neutral-50 hover:bg-neutral-800 transition-colors">
+              Add to Cart
+            </button>
+            <button onClick={handleOrderNow} className="px-5 py-2.5 bg-neutral-900 text-neutral-50 hover:bg-neutral-800 transition-colors">
+              Order Now
+            </button>
+          </div>
         </div>
       </div>
     </div>

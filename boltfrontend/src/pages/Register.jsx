@@ -1,14 +1,18 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import Input from '../components/Input';
 import Button from '../components/Button';
+import OTPVerification from '../components/OTPVerification';
 
 export default function Register() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { signUp } = useAuth();
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [showOTP, setShowOTP] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
   const [formData, setFormData] = useState({
     email: '',
     username: '',
@@ -56,14 +60,28 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await signUp({ username: formData.username, email: formData.email, password: formData.password, phone: formData.phone || undefined });
-      alert('Registration successful! Please login.');
-      navigate('/login');
+      await signUp({ 
+        username: formData.username, 
+        email: formData.email, 
+        password: formData.password, 
+        phone: formData.phone || undefined 
+      });
+      // Show OTP verification screen
+      setUserEmail(formData.email);
+      setShowOTP(true);
     } catch (error) {
       alert(error?.response?.data?.detail || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOTPVerified = () => {
+    const returnUrl = searchParams.get('returnUrl');
+    const loginUrl = returnUrl 
+      ? `/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.&returnUrl=${encodeURIComponent(returnUrl)}`
+      : '/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.';
+    navigate(loginUrl);
   };
 
   const handleChange = (e) => {
@@ -73,6 +91,14 @@ export default function Register() {
       setErrors((prev) => ({ ...prev, [name]: '' }));
     }
   };
+
+  if (showOTP) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 py-12">
+        <OTPVerification email={userEmail} onVerified={handleOTPVerified} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-12">
@@ -136,7 +162,10 @@ export default function Register() {
 
         <p className="mt-6 text-center text-neutral-600 text-sm">
           Already have an account?{' '}
-          <Link to="/login" className="text-neutral-900 hover:underline">
+          <Link 
+            to={`/login${searchParams.get('returnUrl') ? `?returnUrl=${searchParams.get('returnUrl')}` : ''}`}
+            className="text-neutral-900 hover:underline font-medium"
+          >
             Sign In
           </Link>
         </p>

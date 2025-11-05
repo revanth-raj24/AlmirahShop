@@ -30,6 +30,11 @@ export function AuthProvider({ children }) {
     return data;
   };
 
+  const verifyOTP = async (email, otp) => {
+    const { data } = await API.post('/verify-otp', { email, otp });
+    return data;
+  };
+
   const signIn = async (username, password) => {
     const params = new URLSearchParams();
     params.append('username', username);
@@ -55,6 +60,7 @@ export function AuthProvider({ children }) {
     signUp,
     signIn,
     signOut,
+    verifyOTP,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import Base
 
 class Product(Base):
@@ -23,10 +23,18 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     phone = Column(String, unique=True, index=True, nullable=True)
     hashed_password = Column(String)
-    is_admin = Column(Boolean, default=False)
-    # One-to-many: a user can have many cart items
-    cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
 
+    # OTP Verification
+    is_active = Column(Boolean, default=False)  # Only True after OTP verification
+    otp = Column(String, nullable=True)
+    otp_expiry = Column(DateTime, nullable=True)
+
+    # Roles
+    is_admin = Column(Boolean, default=False)
+
+    # Relationships
+    cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
+    wishlist_items = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user")
 
 
@@ -67,4 +75,17 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")
+
+class WishlistItem(Base):
+    __tablename__ = "wishlist_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    product_id = Column(Integer, ForeignKey("products.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="wishlist_items")
+    product = relationship("Product")
+
+
 
