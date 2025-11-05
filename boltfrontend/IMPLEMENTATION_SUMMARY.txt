@@ -1,4 +1,4 @@
-ATELIER - eCommerce Implementation Summary
+AlmirahShop - eCommerce Implementation Summary
 ==========================================
 
 COMPLETED FEATURES:
