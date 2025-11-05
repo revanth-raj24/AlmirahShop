@@ -1,6 +1,6 @@
-# ATELIER - Luxury eCommerce Platform
+# AlmirahShop - eCommerce Platform
 
-A fully functional eCommerce web application with a minimalistic "old-money" aesthetic, built with modern web technologies.
+underconstruction eCommerce web application with a minimalistic "old-money" aesthetic, built with modern web technologies.
 
 ## Tech Stack
 
