@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Literal
+from typing import List, Literal, Optional
 from datetime import datetime
 
 class ProductBase(BaseModel):
@@ -87,6 +87,42 @@ class OrderResponse(BaseModel):
     status: str
     created_at: datetime
     order_items: List[OrderItemResponse] = []
+
+    class Config:
+        from_attributes = True
+
+class WishlistItemResponse(BaseModel):
+    id: int
+    product_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class VerifyOTPRequest(BaseModel):
+    email: str
+    otp: str
+
+class ResendOTPRequest(BaseModel):
+    email: str
+
+class BulkProductCreateItem(BaseModel):
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    price: float
+    discounted_price: Optional[float] = None
+    gender: Optional[str] = None
+    category: Optional[str] = None
+
+class BulkProductCreate(BaseModel):
+    products: List[BulkProductCreateItem]
+
+class BulkProductCreateResponse(BaseModel):
+    created: int
+    total: int
+    errors: List[str]
+    products: List[Product]
 
     class Config:
         from_attributes = True
