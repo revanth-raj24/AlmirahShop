@@ -235,6 +235,36 @@ def get_products_paginated(
         logger.exception("Failed to fetch paginated products")
         raise HTTPException(status_code=500, detail=f"Failed to fetch products: {str(e)}")
 
+@app.get("/products/search", response_model=list[ProductSchema], tags=["Products"])
+def search_products(
+    name: str | None = Query(None, description="Search by name"),
+    min_price: float | None = Query(None, description="Minimum price"),
+    max_price: float | None = Query(None, description="Maximum price"),
+    gender: str | None = Query(None, description="Filter by gender: men/women/unisex"),
+    db: Session = Depends(get_db)
+):
+    query = db.query(ProductModel)
+
+    if name:
+        query = query.filter(ProductModel.name.ilike(f"%{name}%"))
+    if min_price is not None:
+        query = query.filter(ProductModel.price >= min_price)
+    if max_price is not None:
+        query = query.filter(ProductModel.price <= max_price)
+    # Only filter by gender if explicitly provided and valid
+    if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
+        # Case-insensitive filter
+        query = query.filter(
+            (ProductModel.gender == gender.lower()) | 
+            (ProductModel.gender == gender.upper()) |
+            (ProductModel.gender == gender.capitalize())
+        )
+
+    results = query.order_by(ProductModel.id.desc()).all()
+    # Normalize gender values to lowercase for Pydantic validation
+    results = [normalize_product_gender(item) for item in results]
+    return results
+
 @app.get("/products/{product_id}", response_model=ProductSchema, tags=["Products"])
 def get_product(product_id: int, db: Session = Depends(get_db)):
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -599,36 +629,6 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = 
         raise HTTPException(status_code=404, detail="Order not found or access denied")
 
     return order
-
-@app.get("/products/search", response_model=list[ProductSchema], tags=["Products"])
-def search_products(
-    name: str | None = Query(None, description="Search by name"),
-    min_price: float | None = Query(None, description="Minimum price"),
-    max_price: float | None = Query(None, description="Maximum price"),
-    gender: str | None = Query(None, description="Filter by gender: men/women/unisex"),
-    db: Session = Depends(get_db)
-):
-    query = db.query(ProductModel)
-
-    if name:
-        query = query.filter(ProductModel.name.ilike(f"%{name}%"))
-    if min_price is not None:
-        query = query.filter(ProductModel.price >= min_price)
-    if max_price is not None:
-        query = query.filter(ProductModel.price <= max_price)
-    # Only filter by gender if explicitly provided and valid
-    if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
-        # Case-insensitive filter
-        query = query.filter(
-            (ProductModel.gender == gender.lower()) | 
-            (ProductModel.gender == gender.upper()) |
-            (ProductModel.gender == gender.capitalize())
-        )
-
-    results = query.order_by(ProductModel.id.desc()).all()
-    # Normalize gender values to lowercase for Pydantic validation
-    results = [normalize_product_gender(item) for item in results]
-    return results
 
 @app.post("/products/bulk", response_model=BulkProductCreateResponse, tags=["Products"])
 def create_multiple_products(payload: BulkProductCreate, db: Session = Depends(get_db)):
