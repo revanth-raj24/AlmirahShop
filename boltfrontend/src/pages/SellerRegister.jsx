@@ -1,14 +1,12 @@
 import { useState } from 'react';
-import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useNavigate, Link } from 'react-router-dom';
+import API from '../lib/api';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import OTPVerification from '../components/OTPVerification';
 
-export default function Register() {
+export default function SellerRegister() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const { signUp } = useAuth();
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [showOTP, setShowOTP] = useState(false);
@@ -60,13 +58,12 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await signUp({ 
+      await API.post('/users/register-seller', { 
         username: formData.username, 
         email: formData.email, 
         password: formData.password, 
         phone: formData.phone || undefined 
       });
-      // Show OTP verification screen
       setUserEmail(formData.email);
       setShowOTP(true);
     } catch (error) {
@@ -77,12 +74,8 @@ export default function Register() {
   };
 
   const handleOTPVerified = () => {
-    const returnUrl = searchParams.get('returnUrl');
     const username = formData.username;
-    const loginUrl = returnUrl 
-      ? `/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.&username=${encodeURIComponent(username)}&returnUrl=${encodeURIComponent(returnUrl)}`
-      : `/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.&username=${encodeURIComponent(username)}`;
-    navigate(loginUrl);
+    navigate(`/seller/login?message=Email%20verified%20successfully!%20Your%20seller%20account%20is%20now%20active.%20Please%20wait%20for%20admin%20approval.&username=${encodeURIComponent(username)}`);
   };
 
   const handleChange = (e) => {
@@ -104,8 +97,8 @@ export default function Register() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-md">
-        <h1 className="font-serif text-4xl text-neutral-900 mb-2 text-center">Create Account</h1>
-        <p className="text-neutral-600 text-center mb-8">Join our exclusive community</p>
+        <h1 className="font-serif text-4xl text-neutral-900 mb-2 text-center">Become a Seller</h1>
+        <p className="text-neutral-600 text-center mb-8">Register your seller account</p>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <Input
@@ -157,20 +150,21 @@ export default function Register() {
           />
 
           <Button type="submit" disabled={loading} className="w-full">
-            {loading ? 'Creating Account...' : 'Create Account'}
+            {loading ? 'Creating Account...' : 'Register as Seller'}
           </Button>
         </form>
 
         <p className="mt-6 text-center text-neutral-600 text-sm">
-          Already have an account?{' '}
+          Already have a seller account?{' '}
           <Link 
-            to={`/login${searchParams.get('returnUrl') ? `?returnUrl=${searchParams.get('returnUrl')}` : ''}`}
+            to="/seller/login"
             className="text-neutral-900 hover:underline font-medium"
           >
-            Sign In
+            Seller Login
           </Link>
         </p>
       </div>
     </div>
   );
 }
+

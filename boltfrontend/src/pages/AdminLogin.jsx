@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Input from '../components/Input';
 import Button from '../components/Button';
 
-export default function Login() {
+export default function AdminLogin() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
   const [searchParams] = useSearchParams();
@@ -20,7 +20,6 @@ export default function Login() {
       setMessage(decodeURIComponent(msg));
     }
     
-    // Set username from URL if provided (e.g., after registration)
     const usernameParam = searchParams.get('username');
     if (usernameParam) {
       setUsername(decodeURIComponent(usernameParam));
@@ -34,30 +33,25 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const result = await signIn(username, password);
+      await signIn(username, password);
       // Check user role and redirect accordingly
-      const userRole = result.role || localStorage.getItem('userRole');
-      
-      // Check if there's a returnUrl to redirect back to
-      const returnUrl = searchParams.get('returnUrl');
-      if (returnUrl) {
-        navigate(decodeURIComponent(returnUrl));
-      } else if (userRole === 'admin') {
-        // Redirect admins to admin dashboard
+      const userRole = localStorage.getItem('userRole');
+      if (userRole === 'admin') {
         navigate('/admin/dashboard');
-      } else if (userRole === 'seller') {
-        // Redirect sellers to seller dashboard
-        navigate('/seller/dashboard');
       } else {
-        navigate('/');
+        setError('Access denied. Admin credentials required.');
+        // Clear token if not admin
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('userRole');
       }
     } catch (err) {
       const errorDetail = err?.response?.data?.detail || 'Invalid credentials. Please try again.';
       setError(errorDetail);
       
-      // If the error is about email not being verified, provide helpful message
       if (err?.response?.status === 403 && errorDetail.includes('not verified')) {
-        // Error message already includes what to do, so just set it
+        // Redirect to OTP verification
+        navigate(`/admin/verify-otp?email=${encodeURIComponent(username)}`);
       }
     } finally {
       setLoading(false);
@@ -67,8 +61,8 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <h1 className="font-serif text-4xl text-neutral-900 mb-2 text-center">Welcome Back</h1>
-        <p className="text-neutral-600 text-center mb-8">Sign in to your account</p>
+        <h1 className="font-serif text-4xl text-neutral-900 mb-2 text-center">Admin Login</h1>
+        <p className="text-neutral-600 text-center mb-8">Sign in to access admin dashboard</p>
 
         {message && (
           <div className="mb-6 p-4 bg-blue-50 border border-blue-200 text-blue-700 text-sm rounded">
@@ -84,11 +78,11 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <Input
-            label="Username"
+            label="Username or Email"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
-            placeholder="Enter your username"
+            placeholder="Enter your username or email"
           />
 
           <Input
@@ -99,25 +93,16 @@ export default function Login() {
             required
           />
 
-          <div className="text-right">
-            <a href="#" className="text-sm text-neutral-600 hover:text-neutral-900 transition-colors duration-300">
-              Forgot password?
-            </a>
-          </div>
-
           <Button type="submit" disabled={loading} className="w-full">
-            {loading ? 'Signing In...' : 'Sign In'}
+            {loading ? 'Signing In...' : 'Sign In as Admin'}
           </Button>
         </form>
 
         <div className="mt-6 space-y-4">
           <p className="text-center text-neutral-600 text-sm">
-            Don't have an account?{' '}
-            <Link 
-              to={`/register${searchParams.get('returnUrl') ? `?returnUrl=${searchParams.get('returnUrl')}` : ''}`}
-              className="text-neutral-900 hover:underline font-medium"
-            >
-              Create Account
+            Not an admin?{' '}
+            <Link to="/login" className="text-neutral-900 hover:underline font-medium">
+              Regular Login
             </Link>
           </p>
         </div>
@@ -125,3 +110,4 @@ export default function Login() {
     </div>
   );
 }
+
