@@ -23,6 +23,8 @@ class Product(BaseModel):
     discounted_price: float | None = None
     gender: Literal['men','women','unisex'] | None = None
     category: str | None = None
+    seller_id: int | None = None
+    is_verified: bool | None = None
 
     class Config:
         from_attributes = True
@@ -50,6 +52,26 @@ class UserResponse(BaseModel):
     username: str
     email: str
     phone: str | None = None
+    role: str | None = None
+    is_approved: bool | None = None
+
+    class Config:
+        from_attributes = True
+
+class SellerCreate(BaseModel):
+    username: str
+    email: str
+    phone: str | None = None
+    password: str
+
+class SellerResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    phone: str | None = None
+    role: str
+    is_approved: bool
+    is_active: bool
 
     class Config:
         from_attributes = True

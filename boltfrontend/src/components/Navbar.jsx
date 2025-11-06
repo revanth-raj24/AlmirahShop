@@ -91,6 +91,22 @@ export default function Navbar() {
                   <User className="w-5 h-5" />
                 </button>
                 <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-neutral-300/20 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300">
+                  {user?.role === 'admin' && (
+                    <Link
+                      to="/admin/dashboard"
+                      className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                    >
+                      Admin Dashboard
+                    </Link>
+                  )}
+                  {user?.role === 'seller' && (
+                    <Link
+                      to="/seller/dashboard"
+                      className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                    >
+                      Seller Dashboard
+                    </Link>
+                  )}
                   <Link
                     to="/orders"
                     className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
@@ -106,12 +122,20 @@ export default function Navbar() {
                 </div>
               </div>
             ) : (
-              <Link
-                to="/login"
-                className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
-              >
-                Login
-              </Link>
+              <>
+                <Link
+                  to="/login"
+                  className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
+                >
+                  Login
+                </Link>
+                <Link
+                  to="/seller/login"
+                  className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
+                >
+                  Sell
+                </Link>
+              </>
             )}
 
             <Link

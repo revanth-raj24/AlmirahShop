@@ -140,10 +140,15 @@ export default function Orders() {
               <div className="space-y-4">
                 {(order.order_items || []).map((item) => {
                   const p = productById.get(item.product_id) || {};
+                  const imageUrl = p.image_url || 'https://via.placeholder.com/400x533?text=Product';
                   return (
                     <div key={item.id} className="flex gap-4">
-                      <div className="w-20 h-24 bg-neutral-100 flex items-center justify-center">
-                        <span className="text-neutral-400 text-xs">No Image</span>
+                      <div className="w-20 h-24 bg-neutral-100 flex items-center justify-center overflow-hidden">
+                        <img
+                          src={imageUrl}
+                          alt={p.name || 'Product'}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                       <div className="flex-1">
                         <h3 className="font-serif text-lg text-neutral-900 mb-1">{p.name || 'Product'}</h3>

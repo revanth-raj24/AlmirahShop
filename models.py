@@ -14,6 +14,10 @@ class Product(Base):
     discounted_price = Column(Float, nullable=True)
     gender = Column(String, nullable=True, index=True)
     category = Column(String, nullable=True, index=True)
+    seller_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_verified = Column(Boolean, default=False, index=True)
+    
+    seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
 
 class User(Base):
     __tablename__ = "users"
@@ -31,11 +35,14 @@ class User(Base):
 
     # Roles
     is_admin = Column(Boolean, default=False)
+    role = Column(String, default="customer", index=True)  # "customer", "seller", "admin"
+    is_approved = Column(Boolean, default=False)  # For sellers: must be approved by admin
 
     # Relationships
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
     wishlist_items = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user")
+    products = relationship("Product", back_populates="seller", foreign_keys="Product.seller_id")
 
 
 class CartItem(Base):
