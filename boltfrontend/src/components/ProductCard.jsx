@@ -2,6 +2,7 @@ import { Heart, ShoppingCart } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { resolveImageUrl } from '../utils/imageUtils';
 
 export default function ProductCard({ product, onAddToCart, onToggleWishlist, isInWishlist }) {
   const { user } = useAuth();
@@ -32,7 +33,7 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
     }
   };
 
-  const imageUrl = product.image_url || 'https://via.placeholder.com/400x533?text=Product';
+  const imageUrl = resolveImageUrl(product.image_url);
   const description = product.description || '';
 
   return (

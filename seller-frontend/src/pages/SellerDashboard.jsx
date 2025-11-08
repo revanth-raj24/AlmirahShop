@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogOut } from 'lucide-react';
 import Button from '../components/Button';
 import Input from '../components/Input';
+import { resolveImageUrl } from '../utils/imageUtils';
 
 export default function SellerDashboard() {
   const { user, signOut } = useAuth();
@@ -47,18 +48,30 @@ export default function SellerDashboard() {
         setProducts(data || []);
       } else if (activeTab === 'orders') {
         const { data } = await API.get('/seller/orders');
-        setOrders(data || []);
+        // New endpoint returns paginated response with items array
+        setOrders(data?.items || []);
       }
     } catch (err) {
-      if (err?.response?.status === 403) {
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
         if (err?.response?.data?.detail?.includes('not approved')) {
           alert('Your seller account is pending admin approval.');
         } else {
-          alert('Seller access required');
+          alert('Authentication required. Please login again.');
         }
+        // Clear invalid token
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('userRole');
         navigate('/seller/login');
       } else {
+        console.error('Failed to fetch data:', err);
         alert('Failed to fetch data');
+      }
+      // Ensure arrays are set to empty on error
+      if (activeTab === 'products') {
+        setProducts([]);
+      } else if (activeTab === 'orders') {
+        setOrders([]);
       }
     } finally {
       setLoading(false);
@@ -182,6 +195,13 @@ export default function SellerDashboard() {
         <div className="flex items-center justify-between mb-8">
           <h1 className="font-serif text-4xl text-neutral-900">Seller Dashboard</h1>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/seller/orders')}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-neutral-900 text-white hover:bg-neutral-800 transition-colors rounded"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              Manage Orders
+            </button>
             <span className="text-sm text-neutral-600">Welcome, {user?.username}</span>
             <button
               onClick={handleSignOut}
@@ -388,11 +408,13 @@ export default function SellerDashboard() {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.map((product) => (
+              {products.map((product) => {
+                const imageUrl = resolveImageUrl(product.image_url);
+                return (
                 <div key={product.id} className="bg-white border border-neutral-300 p-4">
                   <div className="aspect-[3/4] bg-neutral-100 mb-4 overflow-hidden">
-                    {product.image_url ? (
-                      <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+                    {imageUrl ? (
+                      <img src={imageUrl} alt={product.name} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-neutral-400">
                         No Image
@@ -401,21 +423,30 @@ export default function SellerDashboard() {
                   </div>
                   <h3 className="font-serif text-lg mb-2">{product.name}</h3>
                   <p className="text-sm text-neutral-600 mb-2">${product.price}</p>
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className={`px-2 py-1 text-xs rounded ${
-                      product.is_verified 
+                  <div className="flex flex-col gap-2 mb-4">
+                    <span className={`px-2 py-1 text-xs rounded w-fit ${
+                      product.verification_status === 'Approved'
                         ? 'bg-green-100 text-green-700' 
+                        : product.verification_status === 'Rejected'
+                        ? 'bg-red-100 text-red-700'
                         : 'bg-yellow-100 text-yellow-700'
                     }`}>
-                      {product.is_verified ? (
+                      {product.verification_status === 'Approved' ? (
                         <span className="flex items-center gap-1">
                           <CheckCircle className="w-3 h-3" />
-                          Verified
+                          Approved
                         </span>
+                      ) : product.verification_status === 'Rejected' ? (
+                        <span>Rejected</span>
                       ) : (
                         'Pending Verification'
                       )}
                     </span>
+                    {product.verification_notes && (
+                      <div className="text-xs text-red-600 bg-red-50 p-2 rounded">
+                        <strong>Rejection Note:</strong> {product.verification_notes}
+                      </div>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -433,7 +464,8 @@ export default function SellerDashboard() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {products.length === 0 && (
@@ -446,45 +478,91 @@ export default function SellerDashboard() {
 
         {/* Orders Tab */}
         {activeTab === 'orders' && (
-          <div className="bg-white border border-neutral-300">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-neutral-100">
-                  <tr>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Order ID</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Total Price</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Status</th>
-                    <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Date</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-200">
-                  {orders.map((order) => (
-                    <tr key={order.id} className="hover:bg-neutral-50">
-                      <td className="px-6 py-4 text-sm text-neutral-600">#{order.id}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">${order.total_price.toFixed(2)}</td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2 py-1 text-xs rounded ${
-                          order.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                          order.status === 'Paid' ? 'bg-blue-100 text-blue-700' :
-                          order.status === 'Shipped' ? 'bg-green-100 text-green-700' :
-                          'bg-red-100 text-red-700'
-                        }`}>
-                          {order.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-neutral-600">
-                        {new Date(order.created_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="font-serif text-2xl text-neutral-900">My Orders</h2>
+              <Button
+                onClick={() => navigate('/seller/orders')}
+                className="flex items-center gap-2"
+              >
+                <ShoppingCart className="w-5 h-5" />
+                View All Orders
+              </Button>
             </div>
-            {orders.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-neutral-600">No orders found</p>
+            <div className="bg-white border border-neutral-300">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Order ID</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Product</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Customer</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Total</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Status</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Date</th>
+                      <th className="px-6 py-4 text-left text-sm font-medium text-neutral-900">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200">
+                    {Array.isArray(orders) && orders.length > 0 ? (
+                      orders.map((item) => (
+                        <tr key={item.id} className="hover:bg-neutral-50">
+                          <td className="px-6 py-4 text-sm text-neutral-600">#{item.order_id}</td>
+                          <td className="px-6 py-4 text-sm font-medium text-neutral-900">
+                            {item.product?.name || `Product #${item.product_id}`}
+                            <span className="text-neutral-500 text-xs block">Qty: {item.quantity}</span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-neutral-900">
+                            <div>{item.customer_username || 'N/A'}</div>
+                            <div className="text-xs text-neutral-500">{item.customer_email || ''}</div>
+                          </td>
+                          <td className="px-6 py-4 text-sm font-medium text-neutral-900">
+                            ${(item.price * item.quantity).toFixed(2)}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-1 text-xs rounded ${
+                              item.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                              item.status === 'Accepted' ? 'bg-green-100 text-green-700' :
+                              item.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                              item.status === 'Shipped' ? 'bg-blue-100 text-blue-700' :
+                              'bg-neutral-100 text-neutral-700'
+                            }`}>
+                              {item.status}
+                            </span>
+                            {item.rejection_reason && (
+                              <div className="text-xs text-red-600 mt-1">{item.rejection_reason}</div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-neutral-600">
+                            {item.order_ordered_at ? new Date(item.order_ordered_at).toLocaleDateString() : 'N/A'}
+                          </td>
+                          <td className="px-6 py-4">
+                            <button
+                              onClick={() => navigate(`/seller/orders/${item.id}`)}
+                              className="px-3 py-1 text-xs bg-neutral-600 text-white hover:bg-neutral-700 rounded"
+                            >
+                              View Details
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="7" className="px-6 py-12 text-center text-neutral-600">
+                          No orders yet.
+                          <button
+                            onClick={() => navigate('/seller/orders')}
+                            className="mt-4 px-4 py-2 bg-neutral-900 text-white hover:bg-neutral-800 block mx-auto"
+                          >
+                            View All Orders
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
           </div>
         )}
       </div>

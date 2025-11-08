@@ -7,6 +7,10 @@ import AdminForgotPassword from './pages/AdminForgotPassword';
 import AdminResetPassword from './pages/AdminResetPassword';
 import UsersList from './pages/UsersList';
 import UserDetail from './pages/UserDetail';
+import AdminProductVerification from './pages/AdminProductVerification';
+import AdminProductDetail from './pages/AdminProductDetail';
+import AdminReturns from './pages/AdminReturns';
+import AdminReturnDetail from './pages/AdminReturnDetail';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -55,6 +59,38 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <UserDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/products/pending"
+        element={
+          <ProtectedRoute>
+            <AdminProductVerification />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/products/:id"
+        element={
+          <ProtectedRoute>
+            <AdminProductDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/returns"
+        element={
+          <ProtectedRoute>
+            <AdminReturns />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/returns/:id"
+        element={
+          <ProtectedRoute>
+            <AdminReturnDetail />
           </ProtectedRoute>
         }
       />

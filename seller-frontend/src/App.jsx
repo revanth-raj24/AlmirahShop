@@ -6,6 +6,10 @@ import SellerDashboard from './pages/SellerDashboard';
 import SellerOTPVerification from './pages/SellerOTPVerification';
 import SellerForgotPassword from './pages/SellerForgotPassword';
 import SellerResetPassword from './pages/SellerResetPassword';
+import SellerOrders from './pages/SellerOrders';
+import SellerOrderDetail from './pages/SellerOrderDetail';
+import SellerReturns from './pages/SellerReturns';
+import SellerReturnDetail from './pages/SellerReturnDetail';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -39,6 +43,38 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <SellerDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/orders"
+        element={
+          <ProtectedRoute>
+            <SellerOrders />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/orders/:id"
+        element={
+          <ProtectedRoute>
+            <SellerOrderDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/returns"
+        element={
+          <ProtectedRoute>
+            <SellerReturns />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/returns/:id"
+        element={
+          <ProtectedRoute>
+            <SellerReturnDetail />
           </ProtectedRoute>
         }
       />

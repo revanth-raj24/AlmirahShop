@@ -16,6 +16,7 @@ import ProductDetails from './pages/ProductDetails';
 import Profile from './pages/profile/Profile';
 import EditProfile from './pages/profile/EditProfile';
 import ChangePassword from './pages/profile/ChangePassword';
+import Returns from './pages/Returns';
 
 function App() {
   return (
@@ -36,6 +37,7 @@ function App() {
               <Route path="/profile/change-password" element={<ChangePassword />} />
               <Route path="/profile/addresses" element={<AddressManagement />} />
               <Route path="/profile/orders" element={<Orders />} />
+              <Route path="/profile/returns" element={<Returns />} />
               <Route path="/profile/wishlist" element={<Wishlist />} />
               <Route path="/cart" element={<Cart />} />
               <Route path="/orders" element={<Orders />} />

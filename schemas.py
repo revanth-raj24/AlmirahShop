@@ -25,6 +25,9 @@ class Product(BaseModel):
     category: str | None = None
     seller_id: int | None = None
     is_verified: bool | None = None
+    verification_status: str | None = None
+    verification_notes: str | None = None
+    submitted_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -117,6 +120,16 @@ class OrderItemResponse(BaseModel):
     product_id: int
     quantity: int
     price: float
+    seller_id: Optional[int] = None
+    status: Optional[str] = "Pending"
+    rejection_reason: Optional[str] = None
+    # Return fields
+    return_status: Optional[str] = "None"
+    return_reason: Optional[str] = None
+    return_notes: Optional[str] = None
+    return_requested_at: Optional[datetime] = None
+    return_processed_at: Optional[datetime] = None
+    is_return_eligible: Optional[bool] = True
     product: Optional[Product] = None  # Include product details
 
     class Config:
@@ -128,8 +141,18 @@ class OrderResponse(BaseModel):
     total_price: float
     status: str
     created_at: datetime
+    ordered_at: Optional[datetime] = None
     order_items: List[OrderItemResponse] = []
     delivery_address: Optional[dict] = None  # Address snapshot
+    # Shipping snapshot fields
+    ship_name: Optional[str] = None
+    ship_phone: Optional[str] = None
+    ship_address_line1: Optional[str] = None
+    ship_address_line2: Optional[str] = None
+    ship_city: Optional[str] = None
+    ship_state: Optional[str] = None
+    ship_country: Optional[str] = None
+    ship_pincode: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -247,3 +270,112 @@ class ProfileUpdate(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+# Seller Order Item Schemas
+class SellerOrderItemResponse(BaseModel):
+    """Order item with order and customer info for seller view"""
+    id: int
+    order_id: int
+    product_id: int
+    quantity: int
+    price: float
+    seller_id: Optional[int] = None
+    status: str
+    rejection_reason: Optional[str] = None
+    product: Optional[Product] = None
+    # Order snapshot info
+    order_ordered_at: Optional[datetime] = None
+    order_ship_name: Optional[str] = None
+    order_ship_phone: Optional[str] = None
+    order_ship_address_line1: Optional[str] = None
+    order_ship_address_line2: Optional[str] = None
+    order_ship_city: Optional[str] = None
+    order_ship_state: Optional[str] = None
+    order_ship_country: Optional[str] = None
+    order_ship_pincode: Optional[str] = None
+    # Customer info
+    customer_username: Optional[str] = None
+    customer_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class SellerOrderItemListResponse(BaseModel):
+    """Paginated list of seller order items"""
+    items: List[SellerOrderItemResponse]
+    total: int
+    page: int
+    page_size: int
+
+class RejectOrderItemRequest(BaseModel):
+    reason: Optional[str] = None
+
+class OverrideOrderItemStatusRequest(BaseModel):
+    status: str
+    reason: Optional[str] = None
+
+# Admin Product Verification Schemas
+class ProductWithSellerInfo(Product):
+    """Product with seller information for admin review"""
+    seller_username: Optional[str] = None
+    seller_email: Optional[str] = None
+    seller_phone: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class RejectProductRequest(BaseModel):
+    notes: Optional[str] = None
+
+# Return Request Schemas
+class ReturnRequestCreate(BaseModel):
+    reason: str
+    notes: Optional[str] = None
+
+class ReturnRejectRequest(BaseModel):
+    notes: Optional[str] = None
+
+class ReturnOverrideRequest(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+class ReturnItemResponse(BaseModel):
+    """Extended order item response with return details"""
+    id: int
+    order_id: int
+    product_id: int
+    quantity: int
+    price: float
+    seller_id: Optional[int] = None
+    status: str
+    rejection_reason: Optional[str] = None
+    return_status: str
+    return_reason: Optional[str] = None
+    return_notes: Optional[str] = None
+    return_requested_at: Optional[datetime] = None
+    return_processed_at: Optional[datetime] = None
+    is_return_eligible: bool
+    product: Optional[Product] = None
+    # Order info
+    order_ordered_at: Optional[datetime] = None
+    order_ship_name: Optional[str] = None
+    order_ship_phone: Optional[str] = None
+    order_ship_address_line1: Optional[str] = None
+    order_ship_address_line2: Optional[str] = None
+    order_ship_city: Optional[str] = None
+    order_ship_state: Optional[str] = None
+    order_ship_country: Optional[str] = None
+    order_ship_pincode: Optional[str] = None
+    # Customer info
+    customer_username: Optional[str] = None
+    customer_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class ReturnListResponse(BaseModel):
+    """Paginated list of return items"""
+    items: List[ReturnItemResponse]
+    total: int
+    page: int
+    page_size: int

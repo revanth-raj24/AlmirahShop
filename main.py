@@ -2,17 +2,19 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
 from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address
-from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, validate_username, validate_password_strength
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import text
+from sqlalchemy import text, desc, or_
 import logging
+import os
 from email_utils import generate_otp, send_otp_email, send_password_reset_email, send_password_reset_success_email
 from password_service import create_reset_token, validate_reset_token, invalidate_reset_token, check_rate_limit
 
@@ -25,9 +27,13 @@ TAGS_METADATA = [
     {"name": "Auth", "description": "Authentication endpoints."},
     {"name": "Cart", "description": "Shopping cart operations."},
     {"name": "Orders", "description": "Order creation and retrieval."},
+    {"name": "Returns", "description": "Order return operations."},
     {"name": "Wishlist", "description": "Wishlist operations."},
     {"name": "Seller", "description": "Seller dashboard operations."},
+    {"name": "Seller Orders", "description": "Seller order management."},
+    {"name": "Seller Returns", "description": "Seller return management."},
     {"name": "Admin", "description": "Admin panel operations."},
+    {"name": "Admin Returns", "description": "Admin return management."},
 ]
 
 app = FastAPI(
@@ -66,6 +72,116 @@ app.add_middleware(
 
 # Create all tables in DB
 Base.metadata.create_all(bind=engine)
+
+# Safe migration: Add new verification columns if they don't exist
+def migrate_verification_fields():
+    """Safely add verification_status, verification_notes, submitted_at columns if they don't exist"""
+    try:
+        with engine.begin() as conn:  # Use begin() for automatic transaction management
+            # Check if verification_status column exists
+            result = conn.execute(text("PRAGMA table_info(products)"))
+            columns = [row[1] for row in result]
+            
+            if "verification_status" not in columns:
+                logger.info("Adding verification_status column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN verification_status VARCHAR DEFAULT 'Pending'"))
+                # Update existing products: if is_verified=True, set status=Approved, else Pending
+                conn.execute(text("UPDATE products SET verification_status = CASE WHEN is_verified = 1 THEN 'Approved' ELSE 'Pending' END"))
+            
+            if "verification_notes" not in columns:
+                logger.info("Adding verification_notes column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN verification_notes TEXT"))
+            
+            if "submitted_at" not in columns:
+                logger.info("Adding submitted_at column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN submitted_at DATETIME"))
+                # Set submitted_at to current time for existing products
+                conn.execute(text("UPDATE products SET submitted_at = datetime('now') WHERE submitted_at IS NULL"))
+                
+            logger.info("Migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Migration error: {e}")
+        # Don't fail startup if migration fails - columns might already exist
+
+# Safe migration: Add return fields to order_items if they don't exist
+def migrate_return_fields():
+    """Safely add return-related columns to order_items table if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            # Check if return_status column exists
+            result = conn.execute(text("PRAGMA table_info(order_items)"))
+            columns = [row[1] for row in result]
+            
+            if "return_status" not in columns:
+                logger.info("Adding return_status column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN return_status VARCHAR DEFAULT 'None'"))
+                # Create index for return_status
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_items_return_status ON order_items(return_status)"))
+            
+            if "return_reason" not in columns:
+                logger.info("Adding return_reason column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN return_reason TEXT"))
+            
+            if "return_notes" not in columns:
+                logger.info("Adding return_notes column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN return_notes TEXT"))
+            
+            if "return_requested_at" not in columns:
+                logger.info("Adding return_requested_at column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN return_requested_at DATETIME"))
+            
+            if "return_processed_at" not in columns:
+                logger.info("Adding return_processed_at column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN return_processed_at DATETIME"))
+            
+            if "is_return_eligible" not in columns:
+                logger.info("Adding is_return_eligible column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN is_return_eligible BOOLEAN DEFAULT 1"))
+                # Set existing items as eligible by default
+                conn.execute(text("UPDATE order_items SET is_return_eligible = 1 WHERE is_return_eligible IS NULL"))
+            
+            logger.info("Return fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Return fields migration error: {e}")
+        # Don't fail startup if migration fails - columns might already exist
+
+# Run migrations on startup
+migrate_verification_fields()
+migrate_return_fields()
+
+# Static file serving for uploads
+UPLOADS_DIR = "uploads"
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+# Static file serving for images (from boltfrontend/public/images)
+IMAGES_DIR = "boltfrontend/public/images"
+if os.path.exists(IMAGES_DIR):
+    app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+
+# Backend base URL for image normalization (configurable via env)
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
+
+def normalize_image_url(image_url: str | None) -> str | None:
+    """Normalize product image URL to absolute URL if needed"""
+    if not image_url:
+        return None
+    # If already absolute URL, return as is
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
+    # If starts with /images, return as is (frontend public folder - Vite will serve it)
+    if image_url.startswith("/images"):
+        return image_url
+    # If starts with /uploads, make it absolute (backend served)
+    if image_url.startswith("/uploads"):
+        return f"{BACKEND_BASE_URL}{image_url}"
+    # Otherwise, assume it's a filename - try /images first (public folder), then /uploads (backend)
+    clean_filename = image_url.lstrip('/')
+    # If it contains a path separator, return as is
+    if '/' in clean_filename:
+        return image_url if image_url.startswith('/') else f"/{image_url}"
+    # Just a filename, assume it's in /images (public folder)
+    return f"/images/{clean_filename}"
 
 # Global exception handler to ensure CORS headers on errors
 @app.exception_handler(HTTPException)
@@ -194,6 +310,82 @@ def ensure_role_columns():
 
 ensure_role_columns()
 
+# Lightweight migration: add missing columns to order_items and orders tables
+def ensure_order_seller_columns():
+    try:
+        with engine.begin() as conn:
+            # Check if order_items table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='order_items'"))
+            if not result.fetchone():
+                logger.info("order_items table does not exist yet, will be created by Base.metadata.create_all()")
+            else:
+                # discover existing columns in order_items
+                result = conn.execute(text("PRAGMA table_info(order_items)"))
+                existing = {row[1] for row in result.fetchall()}
+                to_add = []
+                if 'seller_id' not in existing:
+                    to_add.append("ALTER TABLE order_items ADD COLUMN seller_id INTEGER")
+                if 'status' not in existing:
+                    to_add.append("ALTER TABLE order_items ADD COLUMN status TEXT DEFAULT 'Pending'")
+                if 'rejection_reason' not in existing:
+                    to_add.append("ALTER TABLE order_items ADD COLUMN rejection_reason TEXT")
+                for stmt in to_add:
+                    try:
+                        conn.execute(text(stmt))
+                        logger.info(f"Added column to order_items table: {stmt}")
+                    except Exception as e:
+                        logger.warning(f"Failed to add column to order_items: {e}")
+                
+                # Create index on seller_id if column was added
+                if 'seller_id' not in existing:
+                    try:
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_order_items_seller_id ON order_items(seller_id)"))
+                    except Exception:
+                        pass
+                if 'status' not in existing:
+                    try:
+                        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_order_items_status ON order_items(status)"))
+                    except Exception:
+                        pass
+            
+            # Check if orders table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'"))
+            if not result.fetchone():
+                logger.info("orders table does not exist yet, will be created by Base.metadata.create_all()")
+            else:
+                # discover existing columns in orders
+                result = conn.execute(text("PRAGMA table_info(orders)"))
+                existing = {row[1] for row in result.fetchall()}
+                to_add = []
+                if 'ship_name' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_name TEXT")
+                if 'ship_phone' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_phone TEXT")
+                if 'ship_address_line1' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_address_line1 TEXT")
+                if 'ship_address_line2' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_address_line2 TEXT")
+                if 'ship_city' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_city TEXT")
+                if 'ship_state' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_state TEXT")
+                if 'ship_country' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_country TEXT")
+                if 'ship_pincode' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ship_pincode TEXT")
+                if 'ordered_at' not in existing:
+                    to_add.append("ALTER TABLE orders ADD COLUMN ordered_at DATETIME")
+                for stmt in to_add:
+                    try:
+                        conn.execute(text(stmt))
+                        logger.info(f"Added column to orders table: {stmt}")
+                    except Exception as e:
+                        logger.warning(f"Failed to add column to orders: {e}")
+    except Exception as e:
+        logger.exception(f"Migration ensure_order_seller_columns failed: {e}")
+
+ensure_order_seller_columns()
+
 # Migration: Add reset_token and reset_token_expires to users table
 def ensure_reset_token_columns():
     try:
@@ -320,8 +512,8 @@ def get_products(
 ):
     try:
         query = db.query(ProductModel)
-        # Only show verified products to customers
-        query = query.filter(ProductModel.is_verified == True)
+        # Only show approved products to customers
+        query = query.filter(ProductModel.verification_status == "Approved")
         # Only filter by gender if explicitly provided and valid
         if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
             # Case-insensitive filter
@@ -343,6 +535,9 @@ def normalize_product_gender(product):
     """Normalize product gender to lowercase for Pydantic validation"""
     if hasattr(product, 'gender') and product.gender:
         product.gender = product.gender.lower() if product.gender.lower() in ['men', 'women', 'unisex'] else None
+    # Also normalize image URL
+    if hasattr(product, 'image_url') and product.image_url:
+        product.image_url = normalize_image_url(product.image_url)
     return product
 
 @app.get("/products/paginated", response_model=ProductListResponse, tags=["Products"])
@@ -354,8 +549,8 @@ def get_products_paginated(
 ):
     try:
         base = db.query(ProductModel)
-        # Only show verified products to customers
-        base = base.filter(ProductModel.is_verified == True)
+        # Only show approved products to customers
+        base = base.filter(ProductModel.verification_status == "Approved")
         # Only filter by gender if explicitly provided and not empty
         if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
             # Case-insensitive filter: check both uppercase and lowercase
@@ -386,8 +581,8 @@ def search_products(
     db: Session = Depends(get_db)
 ):
     query = db.query(ProductModel)
-    # Only show verified products to customers
-    query = query.filter(ProductModel.is_verified == True)
+    # Only show approved products to customers
+    query = query.filter(ProductModel.verification_status == "Approved")
 
     if name:
         query = query.filter(ProductModel.name.ilike(f"%{name}%"))
@@ -413,7 +608,7 @@ def search_products(
 def get_product(product_id: int, db: Session = Depends(get_db)):
     product = db.query(ProductModel).filter(
         ProductModel.id == product_id,
-        ProductModel.is_verified == True
+        ProductModel.verification_status == "Approved"
     ).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -970,12 +1165,22 @@ def create_order(
         "tag": address.tag
     }
 
-    # create order
+    # create order with shipping snapshot
+    # Initial order status is "Active" (item-level statuses are primary)
     order = Order(
         user_id=user.id, 
         total_price=0.0, 
-        status="Pending",
-        delivery_address=address_snapshot
+        status="Active",  # Simplified: Active until all items delivered or all rejected
+        delivery_address=address_snapshot,
+        ship_name=address.full_name,
+        ship_phone=address.phone_number,
+        ship_address_line1=address.address_line_1,
+        ship_address_line2=address.address_line_2,
+        ship_city=address.city,
+        ship_state=address.state,
+        ship_country=None,  # Not in Address model, can be added later
+        ship_pincode=address.pincode,
+        ordered_at=datetime.utcnow()
     )
     db.add(order)
     db.flush()  # assign PK to order.id before adding items
@@ -995,7 +1200,9 @@ def create_order(
             order_id=order.id,
             product_id=product.id,
             quantity=ci.quantity,
-            price=product.price  # price per item (store per-item price)
+            price=product.price,  # price per item (store per-item price)
+            seller_id=product.seller_id,  # Copy seller_id from product
+            status="Pending"  # Initial status
         )
         db.add(order_item)
 
@@ -1015,13 +1222,20 @@ def list_orders(db: Session = Depends(get_db), current_user: str = Depends(get_c
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     orders = db.query(Order).filter(Order.user_id == user.id).order_by(Order.created_at.desc()).all()
-    # Load order items with product details
+    # Load order items with product details and seller info
     for order in orders:
         order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
         for item in order_items:
             item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
             if item.product:
                 normalize_product_gender(item.product)
+            # Add seller info to product if seller_id exists
+            if item.seller_id:
+                seller = db.query(User).filter(User.id == item.seller_id).first()
+                if seller and item.product:
+                    # Add seller info as attributes (will be serialized in response)
+                    item.product.seller_username = seller.username
+                    item.product.seller_email = seller.email
         order.order_items = order_items
     return orders
 
@@ -1037,15 +1251,180 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = 
     if not order:
         raise HTTPException(status_code=404, detail="Order not found or access denied")
 
-    # Load order items with product details
+    # Load order items with product details and seller info
     order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
     for item in order_items:
         item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
         if item.product:
             normalize_product_gender(item.product)
+        # Add seller info to product if seller_id exists
+        if item.seller_id:
+            seller = db.query(User).filter(User.id == item.seller_id).first()
+            if seller and item.product:
+                # Add seller info as attributes (will be serialized in response)
+                item.product.seller_username = seller.username
+                item.product.seller_email = seller.email
     order.order_items = order_items
 
     return order
+
+# ==================== CUSTOMER RETURN ROUTES ====================
+
+@app.post("/returns/request/{order_item_id}", response_model=OrderItemResponse, tags=["Returns"])
+def request_return(
+    order_item_id: int,
+    request_data: ReturnRequestCreate,
+    db: Session = Depends(get_db),
+    current_user_obj: User = Depends(customer_only)
+):
+    """Customer requests a return for an order item"""
+    # Get order item
+    order_item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    if not order_item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+    
+    # Verify order belongs to current user
+    order = db.query(Order).filter(Order.id == order_item.order_id).first()
+    if not order or order.user_id != current_user_obj.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Check if item is delivered (only delivered items can be returned)
+    if order_item.status != "Delivered":
+        raise HTTPException(
+            status_code=400, 
+            detail="Only delivered items can be returned"
+        )
+    
+    # Check if already has a return request
+    if order_item.return_status and order_item.return_status != "None":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Return already {order_item.return_status}"
+        )
+    
+    # Check if item is return eligible
+    if not order_item.is_return_eligible:
+        raise HTTPException(
+            status_code=400,
+            detail="This item is not eligible for return"
+        )
+    
+    # Update return fields
+    order_item.return_status = "ReturnRequested"
+    order_item.return_reason = request_data.reason
+    order_item.return_notes = request_data.notes
+    order_item.return_requested_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(order_item)
+    
+    # Load product for response
+    order_item.product = db.query(ProductModel).filter(ProductModel.id == order_item.product_id).first()
+    if order_item.product:
+        normalize_product_gender(order_item.product)
+    
+    return order_item
+
+@app.patch("/returns/cancel/{order_item_id}", response_model=OrderItemResponse, tags=["Returns"])
+def cancel_return(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_user_obj: User = Depends(customer_only)
+):
+    """Customer cancels a return request"""
+    order_item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    if not order_item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+    
+    # Verify order belongs to current user
+    order = db.query(Order).filter(Order.id == order_item.order_id).first()
+    if not order or order.user_id != current_user_obj.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Only allow cancellation if status is ReturnRequested
+    if order_item.return_status != "ReturnRequested":
+        raise HTTPException(
+            status_code=400,
+            detail="Can only cancel return requests that are pending"
+        )
+    
+    # Reset return fields
+    order_item.return_status = "None"
+    order_item.return_reason = None
+    order_item.return_notes = None
+    order_item.return_requested_at = None
+    
+    db.commit()
+    db.refresh(order_item)
+    
+    # Load product for response
+    order_item.product = db.query(ProductModel).filter(ProductModel.id == order_item.product_id).first()
+    if order_item.product:
+        normalize_product_gender(order_item.product)
+    
+    return order_item
+
+@app.get("/returns/my", response_model=list[ReturnItemResponse], tags=["Returns"])
+def list_my_returns(
+    db: Session = Depends(get_db),
+    current_user_obj: User = Depends(customer_only)
+):
+    """List all return requests for current customer"""
+    # Get all order items with return requests for this user
+    order_items = (
+        db.query(OrderItem)
+        .join(Order, OrderItem.order_id == Order.id)
+        .filter(
+            Order.user_id == current_user_obj.id,
+            OrderItem.return_status != "None",
+            OrderItem.return_status.isnot(None)
+        )
+        .order_by(OrderItem.return_requested_at.desc())
+        .all()
+    )
+    
+    result = []
+    for item in order_items:
+        # Load product
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+        
+        # Load order info
+        order = db.query(Order).filter(Order.id == item.order_id).first()
+        
+        # Build response
+        return_item = ReturnItemResponse(
+            id=item.id,
+            order_id=item.order_id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            price=item.price,
+            seller_id=item.seller_id,
+            status=item.status,
+            rejection_reason=item.rejection_reason,
+            return_status=item.return_status or "None",
+            return_reason=item.return_reason,
+            return_notes=item.return_notes,
+            return_requested_at=item.return_requested_at,
+            return_processed_at=item.return_processed_at,
+            is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+            product=item.product,
+            order_ordered_at=order.ordered_at if order else None,
+            order_ship_name=order.ship_name if order else None,
+            order_ship_phone=order.ship_phone if order else None,
+            order_ship_address_line1=order.ship_address_line1 if order else None,
+            order_ship_address_line2=order.ship_address_line2 if order else None,
+            order_ship_city=order.ship_city if order else None,
+            order_ship_state=order.ship_state if order else None,
+            order_ship_country=order.ship_country if order else None,
+            order_ship_pincode=order.ship_pincode if order else None,
+            customer_username=current_user_obj.username,
+            customer_email=current_user_obj.email
+        )
+        result.append(return_item)
+    
+    return result
 
 @app.post("/products/bulk", response_model=BulkProductCreateResponse, tags=["Products"])
 def create_multiple_products(payload: BulkProductCreate, db: Session = Depends(get_db)):
@@ -1256,7 +1635,9 @@ def create_seller_product(
     new_product = ProductModel(
         **product.model_dump(),
         seller_id=current_seller.id,
-        is_verified=False  # Requires admin verification
+        is_verified=False,  # Requires admin verification
+        verification_status="Pending",  # Set to Pending for admin review
+        submitted_at=datetime.utcnow()  # Record submission time
     )
     db.add(new_product)
     db.commit()
@@ -1443,56 +1824,594 @@ def get_seller_stats(
         "total_revenue": float(total_revenue)
     }
 
-@app.get("/seller/orders", response_model=list[OrderResponse], tags=["Seller"])
+@app.get("/seller/orders", response_model=SellerOrderItemListResponse, tags=["Seller Orders"])
 def get_seller_orders(
+    status: str | None = Query(None, description="Filter by status: Pending, Accepted, Rejected, etc."),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
     db: Session = Depends(get_db),
     current_seller: User = Depends(seller_only)
 ):
-    """Get all orders containing seller's products (seller only)"""
-    # Get all product IDs for this seller
-    seller_product_ids = [p.id for p in db.query(ProductModel).filter(
-        ProductModel.seller_id == current_seller.id
-    ).all()]
+    """Get paginated list of order items for seller's products (seller only)"""
+    # Query order items by seller_id
+    query = db.query(OrderItem).filter(OrderItem.seller_id == current_seller.id)
     
-    if not seller_product_ids:
-        return []
+    # Filter by status if provided
+    if status:
+        query = query.filter(OrderItem.status == status)
     
-    # Get orders that have items with seller's products
-    orders = db.query(Order).join(OrderItem).filter(
-        OrderItem.product_id.in_(seller_product_ids)
-    ).distinct().order_by(Order.created_at.desc()).all()
+    # Join with Order for date filtering
+    query = query.join(Order, OrderItem.order_id == Order.id)
     
-    return orders
+    # Filter by date range if provided
+    if date_from:
+        query = query.filter(Order.ordered_at >= date_from)
+    if date_to:
+        query = query.filter(Order.ordered_at <= date_to)
+    
+    # Get total count
+    total = query.count()
+    
+    # Paginate - order by Order.ordered_at or Order.created_at
+    offset = (page - 1) * page_size
+    # Use distinct to avoid duplicates from join, order by Order fields
+    try:
+        # Try ordering by ordered_at first, fallback to created_at
+        order_items = query.distinct().order_by(desc(Order.ordered_at)).offset(offset).limit(page_size).all()
+    except:
+        # Fallback if ordered_at column doesn't exist yet
+        order_items = query.distinct().order_by(desc(Order.created_at)).offset(offset).limit(page_size).all()
+    
+    # Build response with order and customer info
+    items = []
+    for item in order_items:
+        order = db.query(Order).filter(Order.id == item.order_id).first()
+        customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+        product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if product:
+            normalize_product_gender(product)
+        
+        items.append(SellerOrderItemResponse(
+            id=item.id,
+            order_id=item.order_id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            price=item.price,
+            seller_id=item.seller_id,
+            status=item.status or "Pending",
+            rejection_reason=item.rejection_reason,
+            product=product,
+            order_ordered_at=order.ordered_at if order else order.created_at if order else None,
+            order_ship_name=order.ship_name if order else None,
+            order_ship_phone=order.ship_phone if order else None,
+            order_ship_address_line1=order.ship_address_line1 if order else None,
+            order_ship_address_line2=order.ship_address_line2 if order else None,
+            order_ship_city=order.ship_city if order else None,
+            order_ship_state=order.ship_state if order else None,
+            order_ship_country=order.ship_country if order else None,
+            order_ship_pincode=order.ship_pincode if order else None,
+            customer_username=customer.username if customer else None,
+            customer_email=customer.email if customer else None
+        ))
+    
+    return SellerOrderItemListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size
+    )
 
-@app.get("/seller/orders/{order_id}", response_model=OrderResponse, tags=["Seller"])
-def get_seller_order_details(
-    order_id: int,
+@app.get("/seller/orders/{order_item_id}", response_model=SellerOrderItemResponse, tags=["Seller Orders"])
+def get_seller_order_item(
+    order_item_id: int,
     db: Session = Depends(get_db),
     current_seller: User = Depends(seller_only)
 ):
-    """Get order details for seller's products (seller only)"""
-    # Get all product IDs for this seller
-    seller_product_ids = [p.id for p in db.query(ProductModel).filter(
-        ProductModel.seller_id == current_seller.id
-    ).all()]
+    """Get order item details (seller only)"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
     
-    if not seller_product_ids:
-        raise HTTPException(status_code=404, detail="Order not found")
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found or access denied")
     
-    # Check if order contains seller's products
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if product:
+        normalize_product_gender(product)
+    
+    return SellerOrderItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status or "Pending",
+        rejection_reason=item.rejection_reason,
+        product=product,
+        order_ordered_at=order.ordered_at if order else order.created_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+def update_order_status_from_items(order_id: int, db: Session):
+    """Update order status based on all order items' statuses - simplified logic"""
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        return
     
-    order_items = db.query(OrderItem).filter(
-        OrderItem.order_id == order_id,
-        OrderItem.product_id.in_(seller_product_ids)
-    ).all()
-    
+    # Get all order items for this order
+    order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
     if not order_items:
-        raise HTTPException(status_code=404, detail="Order not found or no seller products in this order")
+        return
     
-    return order
+    # Count statuses - item-level statuses are primary
+    statuses = [item.status for item in order_items]
+    all_delivered = all(s == "Delivered" for s in statuses)
+    all_rejected = all(s == "Rejected" for s in statuses)
+    has_rejected = any(s == "Rejected" for s in statuses)
+    
+    # Simplified order status logic:
+    # - "Completed" if all items are delivered
+    # - "Cancelled" if all items are rejected
+    # - "Active" otherwise (pending, accepted, shipped, etc.)
+    if all_delivered:
+        order.status = "Completed"
+    elif all_rejected:
+        order.status = "Cancelled"
+    else:
+        # Any other state (pending, accepted, shipped, etc.) = Active
+        order.status = "Active"
+    
+    db.commit()
+
+@app.patch("/seller/orders/{order_item_id}/accept", response_model=SellerOrderItemResponse, tags=["Seller Orders"])
+def accept_order_item(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Accept an order item (seller only)"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=403, detail="Order item not found or access denied")
+    
+    # Allow accepting from Pending or Rejected status (idempotent)
+    if item.status not in ["Pending", "Rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot accept order item with status '{item.status}'. Only Pending or Rejected items can be accepted."
+        )
+    
+    item.status = "Accepted"
+    item.rejection_reason = None
+    db.commit()
+    db.refresh(item)
+    
+    # Update order status based on all items
+    update_order_status_from_items(item.order_id, db)
+    
+    # Return updated item with full details
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if product:
+        normalize_product_gender(product)
+    
+    return SellerOrderItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        product=product,
+        order_ordered_at=order.ordered_at if order else order.created_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+@app.patch("/seller/orders/{order_item_id}/reject", response_model=SellerOrderItemResponse, tags=["Seller Orders"])
+def reject_order_item(
+    order_item_id: int,
+    request: RejectOrderItemRequest,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Reject an order item (seller only)"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=403, detail="Order item not found or access denied")
+    
+    # Only allow rejecting from Pending or Accepted status
+    if item.status not in ["Pending", "Accepted"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reject order item with status '{item.status}'. Only Pending or Accepted items can be rejected."
+        )
+    
+    item.status = "Rejected"
+    item.rejection_reason = request.reason
+    db.commit()
+    db.refresh(item)
+    
+    # Update order status based on all items
+    update_order_status_from_items(item.order_id, db)
+    
+    # Return updated item with full details
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if product:
+        normalize_product_gender(product)
+    
+    return SellerOrderItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        product=product,
+        order_ordered_at=order.ordered_at if order else order.created_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+# ==================== SELLER RETURN ROUTES ====================
+
+@app.get("/seller/returns", response_model=ReturnListResponse, tags=["Seller Returns"])
+def list_seller_returns(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """List all return requests for seller's products"""
+    # Get all order items with return requests for this seller
+    query = (
+        db.query(OrderItem)
+        .filter(
+            OrderItem.seller_id == current_seller.id,
+            OrderItem.return_status != "None",
+            OrderItem.return_status.isnot(None)
+        )
+        .order_by(OrderItem.return_requested_at.desc())
+    )
+    
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    result = []
+    for item in items:
+        # Load product
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+        
+        # Load order info
+        order = db.query(Order).filter(Order.id == item.order_id).first()
+        customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+        
+        # Build response
+        return_item = ReturnItemResponse(
+            id=item.id,
+            order_id=item.order_id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            price=item.price,
+            seller_id=item.seller_id,
+            status=item.status,
+            rejection_reason=item.rejection_reason,
+            return_status=item.return_status or "None",
+            return_reason=item.return_reason,
+            return_notes=item.return_notes,
+            return_requested_at=item.return_requested_at,
+            return_processed_at=item.return_processed_at,
+            is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+            product=item.product,
+            order_ordered_at=order.ordered_at if order else None,
+            order_ship_name=order.ship_name if order else None,
+            order_ship_phone=order.ship_phone if order else None,
+            order_ship_address_line1=order.ship_address_line1 if order else None,
+            order_ship_address_line2=order.ship_address_line2 if order else None,
+            order_ship_city=order.ship_city if order else None,
+            order_ship_state=order.ship_state if order else None,
+            order_ship_country=order.ship_country if order else None,
+            order_ship_pincode=order.ship_pincode if order else None,
+            customer_username=customer.username if customer else None,
+            customer_email=customer.email if customer else None
+        )
+        result.append(return_item)
+    
+    return ReturnListResponse(
+        items=result,
+        total=total,
+        page=page,
+        page_size=page_size
+    )
+
+@app.get("/seller/returns/{order_item_id}", response_model=ReturnItemResponse, tags=["Seller Returns"])
+def get_seller_return(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Get return details for a specific order item"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found or access denied")
+    
+    # Load product
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    
+    # Load order info
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status or "None",
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+@app.patch("/seller/returns/{order_item_id}/accept", response_model=ReturnItemResponse, tags=["Seller Returns"])
+def accept_return(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Seller accepts a return request"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found or access denied")
+    
+    if item.return_status != "ReturnRequested":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot accept return with status '{item.return_status}'. Only ReturnRequested returns can be accepted."
+        )
+    
+    item.return_status = "ReturnAccepted"
+    item.return_processed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    
+    # Load product and order info for response
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status,
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+@app.patch("/seller/returns/{order_item_id}/reject", response_model=ReturnItemResponse, tags=["Seller Returns"])
+def reject_return(
+    order_item_id: int,
+    request: ReturnRejectRequest,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Seller rejects a return request"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found or access denied")
+    
+    if item.return_status != "ReturnRequested":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot reject return with status '{item.return_status}'. Only ReturnRequested returns can be rejected."
+        )
+    
+    item.return_status = "ReturnRejected"
+    item.return_notes = request.notes
+    item.return_processed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    
+    # Load product and order info for response
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status,
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+@app.patch("/seller/returns/{order_item_id}/mark-received", response_model=ReturnItemResponse, tags=["Seller Returns"])
+def mark_return_received(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Seller marks returned item as physically received"""
+    item = db.query(OrderItem).filter(
+        OrderItem.id == order_item_id,
+        OrderItem.seller_id == current_seller.id
+    ).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found or access denied")
+    
+    if item.return_status not in ["ReturnAccepted", "ReturnInTransit"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot mark as received with status '{item.return_status}'. Only ReturnAccepted or ReturnInTransit returns can be marked as received."
+        )
+    
+    item.return_status = "ReturnReceived"
+    item.return_processed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    
+    # Load product and order info for response
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status,
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
 
 # ==================== ADMIN ROUTES ====================
 
@@ -1567,6 +2486,100 @@ def get_user_detail(
         "orders": orders,
         "returns": returns
     }
+
+@app.get("/admin/orders", response_model=list[OrderResponse], tags=["Admin"])
+def admin_list_orders(
+    status: str | None = Query(None),
+    seller_id: int | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """List all orders with filters (admin only)"""
+    query = db.query(Order)
+    
+    if status:
+        query = query.filter(Order.status == status)
+    if date_from:
+        query = query.filter(Order.ordered_at >= date_from if Order.ordered_at else Order.created_at >= date_from)
+    if date_to:
+        query = query.filter(Order.ordered_at <= date_to if Order.ordered_at else Order.created_at <= date_to)
+    
+    orders = query.order_by(Order.ordered_at.desc() if Order.ordered_at else Order.created_at.desc()).all()
+    
+    # Load order items with product details
+    for order in orders:
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        if seller_id:
+            order_items = [item for item in order_items if item.seller_id == seller_id]
+        for item in order_items:
+            item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+            if item.product:
+                normalize_product_gender(item.product)
+        order.order_items = order_items
+    
+    return orders
+
+@app.get("/admin/order-items", response_model=list[OrderItemResponse], tags=["Admin"])
+def admin_list_order_items(
+    status: str | None = Query(None),
+    seller_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """List all order items with filters (admin only)"""
+    query = db.query(OrderItem)
+    
+    if status:
+        query = query.filter(OrderItem.status == status)
+    if seller_id:
+        query = query.filter(OrderItem.seller_id == seller_id)
+    
+    items = query.order_by(OrderItem.id.desc()).all()
+    
+    # Load product details
+    for item in items:
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+    
+    return items
+
+@app.patch("/admin/order-items/{order_item_id}/override-status", response_model=OrderItemResponse, tags=["Admin"])
+def admin_override_order_item_status(
+    order_item_id: int,
+    request: OverrideOrderItemStatusRequest,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Override order item status (admin only)"""
+    allowed_statuses = ["Accepted", "Rejected", "Cancelled", "Shipped", "Delivered"]
+    if request.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status must be one of: {', '.join(allowed_statuses)}"
+        )
+    
+    item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+    
+    item.status = request.status
+    if request.reason:
+        item.rejection_reason = request.reason
+    elif request.status != "Rejected":
+        item.rejection_reason = None
+    
+    db.commit()
+    db.refresh(item)
+    
+    # Load product details
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    
+    return item
 
 @app.delete("/admin/users/{user_id}", tags=["Admin"])
 def delete_user(
@@ -1652,12 +2665,19 @@ def get_order_details(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Load order items with product details
+    # Load order items with product details and seller info
     order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
     for item in order_items:
         item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
         if item.product:
             normalize_product_gender(item.product)
+        # Add seller info to product if seller_id exists
+        if item.seller_id:
+            seller = db.query(User).filter(User.id == item.seller_id).first()
+            if seller and item.product:
+                # Add seller info as attributes (will be serialized in response)
+                item.product.seller_username = seller.username
+                item.product.seller_email = seller.email
     order.order_items = order_items
     
     return order
@@ -1710,9 +2730,207 @@ def get_admin_stats(
         "total_revenue": float(total_revenue)
     }
 
+# ==================== ADMIN RETURN ROUTES ====================
+
+@app.get("/admin/returns", response_model=ReturnListResponse, tags=["Admin Returns"])
+def admin_list_returns(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    seller_id: int | None = Query(None),
+    customer_id: int | None = Query(None),
+    status: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """List all return requests with filters (admin only)"""
+    query = (
+        db.query(OrderItem)
+        .filter(
+            OrderItem.return_status != "None",
+            OrderItem.return_status.isnot(None)
+        )
+    )
+    
+    if seller_id:
+        query = query.filter(OrderItem.seller_id == seller_id)
+    if status:
+        query = query.filter(OrderItem.return_status == status)
+    if customer_id:
+        query = query.join(Order, OrderItem.order_id == Order.id).filter(Order.user_id == customer_id)
+    
+    query = query.order_by(OrderItem.return_requested_at.desc())
+    
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    result = []
+    for item in items:
+        # Load product
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+        
+        # Load order info
+        order = db.query(Order).filter(Order.id == item.order_id).first()
+        customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+        
+        # Build response
+        return_item = ReturnItemResponse(
+            id=item.id,
+            order_id=item.order_id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            price=item.price,
+            seller_id=item.seller_id,
+            status=item.status,
+            rejection_reason=item.rejection_reason,
+            return_status=item.return_status or "None",
+            return_reason=item.return_reason,
+            return_notes=item.return_notes,
+            return_requested_at=item.return_requested_at,
+            return_processed_at=item.return_processed_at,
+            is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+            product=item.product,
+            order_ordered_at=order.ordered_at if order else None,
+            order_ship_name=order.ship_name if order else None,
+            order_ship_phone=order.ship_phone if order else None,
+            order_ship_address_line1=order.ship_address_line1 if order else None,
+            order_ship_address_line2=order.ship_address_line2 if order else None,
+            order_ship_city=order.ship_city if order else None,
+            order_ship_state=order.ship_state if order else None,
+            order_ship_country=order.ship_country if order else None,
+            order_ship_pincode=order.ship_pincode if order else None,
+            customer_username=customer.username if customer else None,
+            customer_email=customer.email if customer else None
+        )
+        result.append(return_item)
+    
+    return ReturnListResponse(
+        items=result,
+        total=total,
+        page=page,
+        page_size=page_size
+    )
+
+@app.get("/admin/returns/{order_item_id}", response_model=ReturnItemResponse, tags=["Admin Returns"])
+def admin_get_return(
+    order_item_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get return details for a specific order item (admin only)"""
+    item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found")
+    
+    # Load product
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    
+    # Load order info
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status or "None",
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
+@app.patch("/admin/returns/{order_item_id}/override-status", response_model=ReturnItemResponse, tags=["Admin Returns"])
+def admin_override_return_status(
+    order_item_id: int,
+    request: ReturnOverrideRequest,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Admin overrides return status (admin only)"""
+    # Validate status
+    allowed_statuses = ["None", "ReturnRequested", "ReturnAccepted", "ReturnRejected", "ReturnInTransit", "ReturnReceived", "RefundProcessed"]
+    if request.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid return status. Allowed values: {', '.join(allowed_statuses)}"
+        )
+    
+    item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Return item not found")
+    
+    item.return_status = request.status
+    if request.notes:
+        item.return_notes = request.notes
+    if request.status in ["ReturnAccepted", "ReturnRejected", "ReturnReceived", "RefundProcessed"]:
+        item.return_processed_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(item)
+    
+    # Load product and order info for response
+    item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if item.product:
+        normalize_product_gender(item.product)
+    order = db.query(Order).filter(Order.id == item.order_id).first()
+    customer = db.query(User).filter(User.id == order.user_id).first() if order else None
+    
+    return ReturnItemResponse(
+        id=item.id,
+        order_id=item.order_id,
+        product_id=item.product_id,
+        quantity=item.quantity,
+        price=item.price,
+        seller_id=item.seller_id,
+        status=item.status,
+        rejection_reason=item.rejection_reason,
+        return_status=item.return_status,
+        return_reason=item.return_reason,
+        return_notes=item.return_notes,
+        return_requested_at=item.return_requested_at,
+        return_processed_at=item.return_processed_at,
+        is_return_eligible=item.is_return_eligible if item.is_return_eligible is not None else True,
+        product=item.product,
+        order_ordered_at=order.ordered_at if order else None,
+        order_ship_name=order.ship_name if order else None,
+        order_ship_phone=order.ship_phone if order else None,
+        order_ship_address_line1=order.ship_address_line1 if order else None,
+        order_ship_address_line2=order.ship_address_line2 if order else None,
+        order_ship_city=order.ship_city if order else None,
+        order_ship_state=order.ship_state if order else None,
+        order_ship_country=order.ship_country if order else None,
+        order_ship_pincode=order.ship_pincode if order else None,
+        customer_username=customer.username if customer else None,
+        customer_email=customer.email if customer else None
+    )
+
 # ==================== ADMIN ANALYTICS ENDPOINTS ====================
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 
 @app.get("/admin/stats/kpis", tags=["Admin"])
 def get_admin_kpis(
@@ -2108,45 +3326,148 @@ def delete_seller(
     db.commit()
     return {"message": f"Seller {seller.username} has been deleted"}
 
-@app.get("/admin/products/pending", response_model=list[ProductSchema], tags=["Admin"])
+@app.get("/admin/products/pending", response_model=list[ProductWithSellerInfo], tags=["Admin"])
 def get_pending_products(
     db: Session = Depends(get_db),
     current_admin: User = Depends(admin_only)
 ):
-    """Get all unverified products (admin only)"""
+    """Get all pending products with seller information (admin only)"""
     products = db.query(ProductModel).filter(
-        ProductModel.is_verified == False
-    ).order_by(ProductModel.id.desc()).all()
-    return [normalize_product_gender(p) for p in products]
+        ProductModel.verification_status == "Pending"
+    ).order_by(desc(ProductModel.submitted_at), desc(ProductModel.id)).all()
+    
+    result = []
+    for product in products:
+        normalize_product_gender(product)
+        # Convert SQLAlchemy model to dict
+        product_dict = {
+            "id": product.id,
+            "name": product.name,
+            "description": product.description,
+            "image_url": product.image_url,
+            "price": product.price,
+            "discounted_price": product.discounted_price,
+            "gender": product.gender,
+            "category": product.category,
+            "seller_id": product.seller_id,
+            "is_verified": product.is_verified,
+            "verification_status": product.verification_status,
+            "verification_notes": product.verification_notes,
+            "submitted_at": product.submitted_at,
+            "seller_username": None,
+            "seller_email": None,
+            "seller_phone": None
+        }
+        if product.seller_id:
+            seller = db.query(User).filter(User.id == product.seller_id).first()
+            if seller:
+                product_dict["seller_username"] = seller.username
+                product_dict["seller_email"] = seller.email
+                product_dict["seller_phone"] = seller.phone
+        result.append(ProductWithSellerInfo(**product_dict))
+    
+    return result
 
-@app.get("/admin/products/{product_id}", response_model=ProductSchema, tags=["Admin"])
+@app.get("/admin/products/{product_id}", response_model=ProductWithSellerInfo, tags=["Admin"])
 def get_admin_product(
     product_id: int,
     db: Session = Depends(get_db),
     current_admin: User = Depends(admin_only)
 ):
-    """Get any product by ID (admin only) - includes unverified products"""
+    """Get any product by ID with seller information (admin only) - includes unverified products"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
     normalize_product_gender(product)
-    return product
+    
+    # Convert SQLAlchemy model to dict
+    product_dict = {
+        "id": product.id,
+        "name": product.name,
+        "description": product.description,
+        "image_url": product.image_url,
+        "price": product.price,
+        "discounted_price": product.discounted_price,
+        "gender": product.gender,
+        "category": product.category,
+        "seller_id": product.seller_id,
+        "is_verified": product.is_verified,
+        "verification_status": product.verification_status,
+        "verification_notes": product.verification_notes,
+        "submitted_at": product.submitted_at,
+        "seller_username": None,
+        "seller_email": None,
+        "seller_phone": None
+    }
+    
+    if product.seller_id:
+        seller = db.query(User).filter(User.id == product.seller_id).first()
+        if seller:
+            product_dict["seller_username"] = seller.username
+            product_dict["seller_email"] = seller.email
+            product_dict["seller_phone"] = seller.phone
+    
+    return ProductWithSellerInfo(**product_dict)
 
-@app.post("/admin/products/verify/{product_id}", response_model=ProductSchema, tags=["Admin"])
-def verify_product(
+@app.patch("/admin/products/{product_id}/approve", response_model=ProductSchema, tags=["Admin"])
+def approve_product(
     product_id: int,
     db: Session = Depends(get_db),
     current_admin: User = Depends(admin_only)
 ):
-    """Verify a product (admin only)"""
+    """Approve a product (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
+    product.verification_status = "Approved"
     product.is_verified = True
+    product.verification_notes = None  # Clear any rejection notes
+    db.commit()
+    db.refresh(product)
+    normalize_product_gender(product)
+    return product
+
+@app.patch("/admin/products/{product_id}/reject", response_model=ProductSchema, tags=["Admin"])
+def reject_product(
+    product_id: int,
+    request: RejectProductRequest,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Reject a product with optional notes (admin only)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    product.verification_status = "Rejected"
+    product.is_verified = False
+    product.verification_notes = request.notes
+    db.commit()
+    db.refresh(product)
+    normalize_product_gender(product)
+    return product
+
+# Legacy endpoint for backward compatibility
+@app.post("/admin/products/verify/{product_id}", response_model=ProductSchema, tags=["Admin"])
+def verify_product_legacy(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Legacy endpoint: Approve a product (admin only) - use /approve endpoint instead"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    product.verification_status = "Approved"
+    product.is_verified = True
+    product.verification_notes = None
     db.commit()
     db.refresh(product)
     normalize_product_gender(product)
