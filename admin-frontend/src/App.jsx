@@ -5,6 +5,8 @@ import AdminDashboard from './pages/AdminDashboard';
 import AdminOTPVerification from './pages/AdminOTPVerification';
 import AdminForgotPassword from './pages/AdminForgotPassword';
 import AdminResetPassword from './pages/AdminResetPassword';
+import UsersList from './pages/UsersList';
+import UserDetail from './pages/UserDetail';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -37,6 +39,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AdminDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/users"
+        element={
+          <ProtectedRoute>
+            <UsersList />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/users/:id"
+        element={
+          <ProtectedRoute>
+            <UserDetail />
           </ProtectedRoute>
         }
       />

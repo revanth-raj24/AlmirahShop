@@ -19,18 +19,24 @@ export function AuthProvider({ children }) {
     try {
       const token = localStorage.getItem('token');
       if (token) {
-        // Try to access admin endpoint first (super admin check)
+        // Check if admin - if so, clear token (admin should use admin portal)
         try {
           await API.get('/admin/sellers');
-          localStorage.setItem('userRole', 'admin');
-          setUser(prev => ({ ...prev, role: 'admin' }));
+          // Admin detected - clear token and don't set user
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          localStorage.removeItem('userRole');
+          setUser(null);
           return;
         } catch (adminErr) {
-          // Not an admin, check if seller
+          // Not an admin, check if seller - if so, clear token (seller should use seller portal)
           try {
             await API.get('/seller/products');
-            localStorage.setItem('userRole', 'seller');
-            setUser(prev => ({ ...prev, role: 'seller' }));
+            // Seller detected - clear token and don't set user
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            localStorage.removeItem('userRole');
+            setUser(null);
             return;
           } catch (sellerErr) {
             // Not a seller, default to customer
@@ -50,6 +56,17 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     const username = localStorage.getItem('username');
     const userRole = localStorage.getItem('userRole');
+    
+    // If admin or seller role detected, clear it (they should use their dedicated portals)
+    if (userRole === 'admin' || userRole === 'seller') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('userRole');
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    
     if (token && username) {
       setUser({ username, role: userRole || 'customer' });
       // Fetch user profile to get role
@@ -91,18 +108,48 @@ export function AuthProvider({ children }) {
     let userRole = data.role || 'customer';
     if (!data.role) {
       try {
-        // Check admin first (super admin)
+        // Check admin first (super admin) - if admin, don't allow login in main app
         await API.get('/admin/sellers');
-        userRole = 'admin';
-      } catch {
+        // Admin detected - clear token and throw error
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('userRole');
+        throw new Error('Admin access is only available through the admin portal.');
+      } catch (adminErr) {
+        if (adminErr.message && adminErr.message.includes('admin portal')) {
+          throw adminErr;
+        }
+        // Not an admin, check if seller - if seller, don't allow login in main app
         try {
-          // Check seller
           await API.get('/seller/products');
-          userRole = 'seller';
-        } catch {
+          // Seller detected - clear token and throw error
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          localStorage.removeItem('userRole');
+          throw new Error('Seller access is only available through the seller portal.');
+        } catch (sellerErr) {
+          if (sellerErr.message && sellerErr.message.includes('seller portal')) {
+            throw sellerErr;
+          }
+          // Not a seller, default to customer
           userRole = 'customer';
         }
       }
+    }
+    
+    // If somehow admin or seller role is set, clear it
+    if (userRole === 'admin') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('userRole');
+      throw new Error('Admin access is only available through the admin portal.');
+    }
+    
+    if (userRole === 'seller') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('userRole');
+      throw new Error('Seller access is only available through the seller portal.');
     }
     
     localStorage.setItem('userRole', userRole);

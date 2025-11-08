@@ -77,12 +77,8 @@ export default function Register() {
   };
 
   const handleOTPVerified = () => {
-    const returnUrl = searchParams.get('returnUrl');
-    const username = formData.username;
-    const loginUrl = returnUrl 
-      ? `/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.&username=${encodeURIComponent(username)}&returnUrl=${encodeURIComponent(returnUrl)}`
-      : `/login?message=Email%20verified%20successfully!%20Your%20account%20is%20now%20active.&username=${encodeURIComponent(username)}`;
-    navigate(loginUrl);
+    // After OTP verification, redirect to address setup for new users
+    navigate('/setup-address');
   };
 
   const handleChange = (e) => {

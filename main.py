@@ -5,15 +5,16 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
-from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem
-from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse
-from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only
+from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest
+from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, validate_username, validate_password_strength
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 import logging
-from email_utils import generate_otp, send_otp_email
+from email_utils import generate_otp, send_otp_email, send_password_reset_email, send_password_reset_success_email
+from password_service import create_reset_token, validate_reset_token, invalidate_reset_token, check_rate_limit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fastecom")
@@ -193,6 +194,99 @@ def ensure_role_columns():
 
 ensure_role_columns()
 
+# Migration: Add reset_token and reset_token_expires to users table
+def ensure_reset_token_columns():
+    try:
+        with engine.begin() as conn:
+            # Check if users table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"))
+            if not result.fetchone():
+                logger.info("Users table does not exist yet, will be created by Base.metadata.create_all()")
+                return
+            
+            # Check existing columns in users table
+            result = conn.execute(text("PRAGMA table_info(users)"))
+            existing = {row[1] for row in result.fetchall()}
+            
+            if 'reset_token' not in existing:
+                conn.execute(text("ALTER TABLE users ADD COLUMN reset_token TEXT"))
+                logger.info("Added reset_token column to users table")
+            
+            if 'reset_token_expires' not in existing:
+                conn.execute(text("ALTER TABLE users ADD COLUMN reset_token_expires DATETIME"))
+                logger.info("Added reset_token_expires column to users table")
+            
+            # Create index on reset_token for faster lookups
+            try:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token)"))
+            except Exception:
+                pass  # Index might already exist
+    except Exception as e:
+        logger.exception(f"Error during reset token columns migration: {e}")
+
+ensure_reset_token_columns()
+
+# Migration: Add has_address to users, delivery_address to orders, and create addresses table
+def ensure_address_columns():
+    try:
+        with engine.begin() as conn:
+            # Check if users table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"))
+            if not result.fetchone():
+                logger.info("Users table does not exist yet, will be created by Base.metadata.create_all()")
+                return
+            
+            # Check existing columns in users table
+            result = conn.execute(text("PRAGMA table_info(users)"))
+            existing_users = {row[1] for row in result.fetchall()}
+            
+            if 'has_address' not in existing_users:
+                conn.execute(text("ALTER TABLE users ADD COLUMN has_address BOOLEAN DEFAULT 0"))
+                logger.info("Added has_address column to users table")
+            
+            # Check existing columns in orders table
+            result = conn.execute(text("PRAGMA table_info(orders)"))
+            existing_orders = {row[1] for row in result.fetchall()}
+            
+            if 'delivery_address' not in existing_orders:
+                conn.execute(text("ALTER TABLE orders ADD COLUMN delivery_address TEXT"))
+                logger.info("Added delivery_address column to orders table")
+            
+            # Check if addresses table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='addresses'"))
+            if not result.fetchone():
+                logger.info("Addresses table will be created by Base.metadata.create_all()")
+    except Exception as e:
+        logger.exception(f"Error during address columns migration: {e}")
+
+ensure_address_columns()
+
+# Migration: Add gender and dob to users table
+def ensure_profile_columns():
+    try:
+        with engine.begin() as conn:
+            # Check if users table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'"))
+            if not result.fetchone():
+                logger.info("Users table does not exist yet, will be created by Base.metadata.create_all()")
+                return
+            
+            # Check existing columns in users table
+            result = conn.execute(text("PRAGMA table_info(users)"))
+            existing = {row[1] for row in result.fetchall()}
+            
+            if 'gender' not in existing:
+                conn.execute(text("ALTER TABLE users ADD COLUMN gender TEXT"))
+                logger.info("Added gender column to users table")
+            
+            if 'dob' not in existing:
+                conn.execute(text("ALTER TABLE users ADD COLUMN dob DATETIME"))
+                logger.info("Added dob column to users table")
+    except Exception as e:
+        logger.exception(f"Error during profile columns migration: {e}")
+
+ensure_profile_columns()
+
 # Dependency to get DB session (imported from database.py)
 from database import get_db
 
@@ -346,6 +440,14 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
     logger.info("Signup attempt: username=%s email=%s phone_present=%s", user.username, user.email, bool(user.phone))
     try:
+        # Validate username and password BEFORE checking uniqueness
+        try:
+            validate_username(user.username)
+            validate_password_strength(user.password, username=user.username, email=user.email)
+        except ValueError as e:
+            logger.info("Signup rejected: validation failed: %s", str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+        
         # Normalize phone: treat empty strings as None
         normalized_phone = None
         if user.phone is not None:
@@ -370,6 +472,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         hashed_pw = hash_password(user.password)
         
         # Create user with is_active=False (will be True after OTP verification)
+        # Customers don't need approval - will be auto-approved on OTP verification
         new_user = User(
             username=user.username, 
             email=user.email, 
@@ -379,7 +482,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
             otp=otp,
             otp_expiry=expiry,
             role="customer",  # Default role for regular signup
-            is_approved=False
+            is_approved=False  # Will be set to True on OTP verification
         )
         db.add(new_user)
         try:
@@ -471,6 +574,110 @@ def login_user(
 @app.get("/profile", tags=["Users"])
 def read_profile(current_user: str = Depends(get_current_user)):
     return {"message": f"Welcome, {current_user}!"}
+
+# ==================== PROFILE MANAGEMENT ENDPOINTS ====================
+
+@app.get("/profile/me", response_model=ProfileResponse, tags=["Users"])
+def get_profile(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get current user's profile"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.put("/profile/update", response_model=ProfileResponse, tags=["Users"])
+def update_profile(
+    profile_update: ProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Update user profile (username, phone, gender, dob)"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update only provided fields
+    update_data = profile_update.model_dump(exclude_unset=True)
+    
+    # Validate username if being updated
+    if 'username' in update_data and update_data['username']:
+        new_username = update_data['username']
+        if new_username != user.username:
+            validate_username(new_username)
+            # Check if username already exists
+            existing = db.query(User).filter(User.username == new_username).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Username already taken")
+            update_data['username'] = new_username
+    
+    # Validate phone if being updated
+    if 'phone' in update_data:
+        phone = update_data['phone']
+        if phone:
+            phone = phone.strip()
+            if phone:
+                # Check if phone already exists for another user
+                existing = db.query(User).filter(
+                    User.phone == phone,
+                    User.id != user.id
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail="Phone number already registered")
+                update_data['phone'] = phone
+            else:
+                update_data['phone'] = None
+        else:
+            update_data['phone'] = None
+    
+    # Apply updates
+    for field, value in update_data.items():
+        setattr(user, field, value)
+    
+    db.commit()
+    db.refresh(user)
+    return user
+
+@app.put("/profile/change-password", tags=["Users"])
+def change_password(
+    password_data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Change user password with validation"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify old password
+    if not verify_password(password_data.old_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    # Validate new password strength
+    try:
+        validate_password_strength(
+            password_data.new_password,
+            username=user.username,
+            email=user.email
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Check if new password equals old password
+    if verify_password(password_data.new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password cannot be the same as your current password"
+        )
+    
+    # Hash and update password
+    user.hashed_password = hash_password(password_data.new_password)
+    db.commit()
+    
+    logger.info(f"Password changed successfully for user: {user.username}")
+    return {"message": "Password changed successfully"}
 
 # Seller Registration (separate from customer signup)
 @app.post("/users/register-seller", tags=["Users"])
@@ -707,19 +914,69 @@ def decrease_cart_item(
 
 # ---------------- Create Order (checkout) ----------------
 @app.post("/orders/create", response_model=OrderResponse, tags=["Orders"])
-def create_order(db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
+def create_order(
+    address_id: int = Query(None, description="Address ID for delivery"),
+    db: Session = Depends(get_db), 
+    current_user: str = Depends(get_current_user)
+):
     # find user record
     user = db.query(User).filter(User.username == current_user).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate address requirement
+    if not user.has_address:
+        raise HTTPException(
+            status_code=400, 
+            detail="Address required before placing an order. Please add a delivery address."
+        )
+
+    # Get delivery address
+    if address_id:
+        # Use specified address
+        address = db.query(Address).filter(
+            Address.id == address_id,
+            Address.user_id == user.id
+        ).first()
+        if not address:
+            raise HTTPException(status_code=404, detail="Address not found")
+    else:
+        # Use default address
+        address = db.query(Address).filter(
+            Address.user_id == user.id,
+            Address.is_default == True
+        ).first()
+        if not address:
+            raise HTTPException(
+                status_code=400,
+                detail="No default address found. Please select an address."
+            )
 
     # fetch cart items for user
     cart_items = db.query(CartItem).filter(CartItem.user_id == user.id).all()
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
+    # Create address snapshot for order
+    address_snapshot = {
+        "full_name": address.full_name,
+        "phone_number": address.phone_number,
+        "address_line_1": address.address_line_1,
+        "address_line_2": address.address_line_2,
+        "landmark": address.landmark,
+        "city": address.city,
+        "state": address.state,
+        "pincode": address.pincode,
+        "tag": address.tag
+    }
+
     # create order
-    order = Order(user_id=user.id, total_price=0.0, status="Pending")
+    order = Order(
+        user_id=user.id, 
+        total_price=0.0, 
+        status="Pending",
+        delivery_address=address_snapshot
+    )
     db.add(order)
     db.flush()  # assign PK to order.id before adding items
 
@@ -757,7 +1014,15 @@ def list_orders(db: Session = Depends(get_db), current_user: str = Depends(get_c
     user = db.query(User).filter(User.username == current_user).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    orders = db.query(Order).filter(Order.user_id == user.id).all()
+    orders = db.query(Order).filter(Order.user_id == user.id).order_by(Order.created_at.desc()).all()
+    # Load order items with product details
+    for order in orders:
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        for item in order_items:
+            item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+            if item.product:
+                normalize_product_gender(item.product)
+        order.order_items = order_items
     return orders
 
 
@@ -771,6 +1036,14 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = 
     order = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found or access denied")
+
+    # Load order items with product details
+    order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    for item in order_items:
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+    order.order_items = order_items
 
     return order
 
@@ -949,6 +1222,12 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
     user.is_active = True
     user.otp = None
     user.otp_expiry = None
+    
+    # For customers: auto-approve (bypass approval requirement)
+    # For sellers: approval still required from admin
+    if user.role == "customer":
+        user.is_approved = True
+    
     db.commit()
 
     logger.info("Email verified and account activated for user: %s", user.email)
@@ -1231,9 +1510,119 @@ def list_all_users(
     db: Session = Depends(get_db),
     current_admin: User = Depends(admin_only)
 ):
-    """List all users (admin only)"""
-    users = db.query(User).all()
+    """List all users (admin only) - returns customers and sellers"""
+    users = db.query(User).order_by(User.id.desc()).all()
     return users
+
+@app.get("/admin/users/{user_id}", response_model=UserDetailResponse, tags=["Admin"])
+def get_user_detail(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get full user profile with orders, addresses, and returns (admin only)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get all addresses for this user
+    addresses = db.query(Address).filter(Address.user_id == user_id).all()
+    
+    # Get all orders for this user with order items
+    orders = db.query(Order).filter(Order.user_id == user_id).order_by(Order.created_at.desc()).all()
+    # Load order items with product details for each order
+    for order in orders:
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        for item in order_items:
+            item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+            if item.product:
+                normalize_product_gender(item.product)
+        order.order_items = order_items
+    
+    # Get returns (orders with status Cancelled or Returned)
+    returns = db.query(Order).filter(
+        Order.user_id == user_id,
+        or_(Order.status == "Cancelled", Order.status == "Returned")
+    ).order_by(Order.created_at.desc()).all()
+    # Load order items with product details for returns
+    for return_order in returns:
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == return_order.id).all()
+        for item in order_items:
+            item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+            if item.product:
+                normalize_product_gender(item.product)
+        return_order.order_items = order_items
+    
+    # Build response
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "role": user.role or "customer",
+        "is_active": user.is_active,
+        "is_approved": user.is_approved if user.role == "seller" else None,  # Only show for sellers
+        "created_at": None,  # User model doesn't have created_at, but we can add it later if needed
+        "addresses": addresses,
+        "orders": orders,
+        "returns": returns
+    }
+
+@app.delete("/admin/users/{user_id}", tags=["Admin"])
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Delete a user account and all related data (admin only)"""
+    # Prevent admin from deleting themselves
+    if user_id == current_admin.id:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot delete your own account"
+        )
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    username = user.username
+    
+    # Delete related data (cascade should handle most, but being explicit)
+    # Delete cart items
+    db.query(CartItem).filter(CartItem.user_id == user_id).delete()
+    
+    # Delete wishlist items
+    db.query(WishlistItem).filter(WishlistItem.user_id == user_id).delete()
+    
+    # Delete addresses
+    db.query(Address).filter(Address.user_id == user_id).delete()
+    
+    # Delete order items (via cascade from orders)
+    # Get all order IDs first
+    order_ids = [o.id for o in db.query(Order).filter(Order.user_id == user_id).all()]
+    if order_ids:
+        db.query(OrderItem).filter(OrderItem.order_id.in_(order_ids)).delete()
+    
+    # Delete orders
+    db.query(Order).filter(Order.user_id == user_id).delete()
+    
+    # If seller, delete their products
+    if user.role == "seller":
+        # Delete cart items referencing seller's products
+        seller_product_ids = [p.id for p in db.query(ProductModel).filter(ProductModel.seller_id == user_id).all()]
+        if seller_product_ids:
+            db.query(CartItem).filter(CartItem.product_id.in_(seller_product_ids)).delete()
+            db.query(OrderItem).filter(OrderItem.product_id.in_(seller_product_ids)).delete()
+        # Delete products
+        db.query(ProductModel).filter(ProductModel.seller_id == user_id).delete()
+    
+    # Delete the user
+    db.delete(user)
+    db.commit()
+    
+    logger.info(f"User {username} (ID: {user_id}) deleted by admin {current_admin.username}")
+    return {"message": f"User {username} has been deleted successfully"}
 
 @app.get("/admin/orders", response_model=list[OrderResponse], tags=["Admin"])
 def list_all_orders(
@@ -1242,6 +1631,14 @@ def list_all_orders(
 ):
     """List all orders (admin only)"""
     orders = db.query(Order).order_by(Order.created_at.desc()).all()
+    # Load order items with product details
+    for order in orders:
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        for item in order_items:
+            item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+            if item.product:
+                normalize_product_gender(item.product)
+        order.order_items = order_items
     return orders
 
 @app.get("/admin/orders/{order_id}", response_model=OrderResponse, tags=["Admin"])
@@ -1254,6 +1651,15 @@ def get_order_details(
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Load order items with product details
+    order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    for item in order_items:
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product)
+    order.order_items = order_items
+    
     return order
 
 @app.patch("/admin/orders/{order_id}/status", tags=["Admin"])
@@ -1304,6 +1710,320 @@ def get_admin_stats(
         "total_revenue": float(total_revenue)
     }
 
+# ==================== ADMIN ANALYTICS ENDPOINTS ====================
+
+from sqlalchemy import func, or_
+
+@app.get("/admin/stats/kpis", tags=["Admin"])
+def get_admin_kpis(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get high-level KPIs for admin dashboard"""
+    # Platform Overview
+    total_users = db.query(User).count()
+    total_sellers = db.query(User).filter(User.role == "seller").count()
+    verified_sellers = db.query(User).filter(
+        User.role == "seller",
+        User.is_approved == True,
+        User.is_active == True
+    ).count()
+    pending_seller_approvals = db.query(User).filter(
+        User.role == "seller",
+        User.is_approved == False,
+        User.is_active == True
+    ).count()
+    
+    # Catalog Health
+    total_products = db.query(ProductModel).count()
+    verified_products = db.query(ProductModel).filter(ProductModel.is_verified == True).count()
+    pending_product_verifications = db.query(ProductModel).filter(ProductModel.is_verified == False).count()
+    
+    # Orders & Business
+    total_orders = db.query(Order).count()
+    revenue_total = db.query(func.sum(Order.total_price)).scalar() or 0.0
+    
+    # Calculate average order value
+    if total_orders > 0:
+        avg_order_value = float(revenue_total) / total_orders
+    else:
+        avg_order_value = 0.0
+    
+    # Today's orders
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_orders_today = db.query(Order).filter(Order.created_at >= today_start).count()
+    
+    # Returns and Cancellations (using cancelled orders as returns for now)
+    returns_requested = db.query(Order).filter(
+        or_(Order.status == "Cancelled", Order.status == "Returned")
+    ).count()
+    total_cancellations = db.query(Order).filter(Order.status == "Cancelled").count()
+    
+    return {
+        "total_users": total_users,
+        "total_sellers": total_sellers,
+        "total_verified_sellers": verified_sellers,
+        "pending_seller_approvals": pending_seller_approvals,
+        "total_products": total_products,
+        "verified_products": verified_products,
+        "pending_product_verifications": pending_product_verifications,
+        "total_orders": total_orders,
+        "revenue_total": float(revenue_total),
+        "avg_order_value": round(avg_order_value, 2),
+        "daily_orders_today": daily_orders_today,
+        "returns_requested": returns_requested,
+        "total_cancellations": total_cancellations
+    }
+
+@app.get("/admin/stats/orders-trend", tags=["Admin"])
+def get_orders_trend(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get orders trend over the past N days"""
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Query orders grouped by date (SQLite compatible)
+    # SQLite uses date() function, but SQLAlchemy needs func.date() or we can use Python grouping
+    orders = db.query(Order).filter(
+        Order.created_at >= start_date
+    ).all()
+    
+    # Group by date in Python (more compatible across databases)
+    orders_by_date = {}
+    for order in orders:
+        order_date = order.created_at.date() if order.created_at else start_date.date()
+        if order_date not in orders_by_date:
+            orders_by_date[order_date] = {"order_count": 0, "revenue": 0.0}
+        orders_by_date[order_date]["order_count"] += 1
+        orders_by_date[order_date]["revenue"] += float(order.total_price or 0.0)
+    
+    # Create a complete date range
+    date_dict = {}
+    current_date = start_date.date()
+    end_date_only = end_date.date()
+    
+    while current_date <= end_date_only:
+        date_dict[current_date] = {"date": current_date.isoformat(), "order_count": 0, "revenue": 0.0}
+        current_date += timedelta(days=1)
+    
+    # Fill in actual data
+    for date_key, data in orders_by_date.items():
+        if date_key in date_dict:
+            date_dict[date_key] = {
+                "date": date_key.isoformat(),
+                "order_count": data["order_count"],
+                "revenue": float(data["revenue"])
+            }
+    
+    return list(date_dict.values())
+
+@app.get("/admin/stats/category-sales", tags=["Admin"])
+def get_category_sales(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get sales by category (pie chart data)"""
+    # Join orders -> order_items -> products to get category sales
+    category_stats = db.query(
+        ProductModel.category,
+        func.sum(OrderItem.price * OrderItem.quantity).label('revenue'),
+        func.sum(OrderItem.quantity).label('order_count')
+    ).join(
+        OrderItem, OrderItem.product_id == ProductModel.id
+    ).join(
+        Order, Order.id == OrderItem.order_id
+    ).filter(
+        ProductModel.category.isnot(None),
+        ProductModel.category != ''
+    ).group_by(
+        ProductModel.category
+    ).all()
+    
+    result = []
+    for row in category_stats:
+        result.append({
+            "category_name": row.category or "Uncategorized",
+            "revenue_contribution": float(row.revenue or 0.0),
+            "order_count": int(row.order_count or 0)
+        })
+    
+    # If no category data, return empty list
+    return result if result else [{"category_name": "No Data", "revenue_contribution": 0.0, "order_count": 0}]
+
+@app.get("/admin/stats/top-sellers", tags=["Admin"])
+def get_top_sellers(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get top sellers by revenue"""
+    # Get sellers with their total sales
+    seller_stats = db.query(
+        User.id.label('seller_id'),
+        User.username.label('seller_name'),
+        func.sum(OrderItem.price * OrderItem.quantity).label('total_sales'),
+        func.count(func.distinct(Order.id)).label('order_count'),
+        User.is_approved.label('is_verified')
+    ).join(
+        ProductModel, ProductModel.seller_id == User.id
+    ).join(
+        OrderItem, OrderItem.product_id == ProductModel.id
+    ).join(
+        Order, Order.id == OrderItem.order_id
+    ).filter(
+        User.role == "seller"
+    ).group_by(
+        User.id, User.username, User.is_approved
+    ).order_by(
+        func.sum(OrderItem.price * OrderItem.quantity).desc()
+    ).limit(limit).all()
+    
+    result = []
+    for row in seller_stats:
+        result.append({
+            "seller_id": row.seller_id,
+            "seller_name": row.seller_name,
+            "total_sales": float(row.total_sales or 0.0),
+            "order_count": int(row.order_count or 0),
+            "is_verified": bool(row.is_verified)
+        })
+    
+    return result
+
+@app.get("/admin/stats/top-products", tags=["Admin"])
+def get_top_products(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get top products by sales"""
+    # Get products with their sales stats
+    product_stats = db.query(
+        ProductModel.id.label('product_id'),
+        ProductModel.name.label('product_name'),
+        func.sum(OrderItem.price * OrderItem.quantity).label('total_sales'),
+        func.sum(OrderItem.quantity).label('units_sold')
+    ).join(
+        OrderItem, OrderItem.product_id == ProductModel.id
+    ).join(
+        Order, Order.id == OrderItem.order_id
+    ).group_by(
+        ProductModel.id, ProductModel.name
+    ).order_by(
+        func.sum(OrderItem.price * OrderItem.quantity).desc()
+    ).limit(limit).all()
+    
+    result = []
+    for row in product_stats:
+        result.append({
+            "product_id": row.product_id,
+            "product_name": row.product_name,
+            "total_sales": float(row.total_sales or 0.0),
+            "units_sold": int(row.units_sold or 0),
+            "rating": None  # Placeholder - can be added if rating system exists
+        })
+    
+    return result
+
+@app.get("/admin/stats/returns-stats", tags=["Admin"])
+def get_returns_stats(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get returns statistics"""
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Get cancelled/returned orders in the period
+    returned_orders = db.query(Order).filter(
+        Order.created_at >= start_date,
+        or_(Order.status == "Cancelled", Order.status == "Returned")
+    ).all()
+    
+    total_returns = len(returned_orders)
+    
+    # Calculate return rate
+    total_orders_in_period = db.query(Order).filter(
+        Order.created_at >= start_date
+    ).count()
+    
+    if total_orders_in_period > 0:
+        return_rate = (total_returns / total_orders_in_period) * 100
+    else:
+        return_rate = 0.0
+    
+    # Return reason distribution (using status as reason for now)
+    reason_distribution = {}
+    for order in returned_orders:
+        reason = order.status
+        reason_distribution[reason] = reason_distribution.get(reason, 0) + 1
+    
+    return {
+        "return_reason_distribution": reason_distribution,
+        "total_returns": total_returns,
+        "return_rate": round(return_rate, 2)
+    }
+
+@app.get("/admin/stats/platform-health", tags=["Admin"])
+def get_platform_health(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get platform health metrics"""
+    # Out of stock rate
+    total_products = db.query(ProductModel).count()
+    if total_products > 0:
+        # Assuming stock_quantity field exists or using a placeholder
+        # For now, we'll calculate based on products with no stock
+        # This is a placeholder - adjust based on actual stock tracking
+        out_of_stock_products = 0  # Placeholder
+        out_of_stock_rate = 0.0  # Placeholder
+    else:
+        out_of_stock_rate = 0.0
+    
+    # Verified listing rate
+    if total_products > 0:
+        verified_products = db.query(ProductModel).filter(ProductModel.is_verified == True).count()
+        verified_listing_rate = (verified_products / total_products) * 100
+    else:
+        verified_listing_rate = 0.0
+    
+    # Average image quality score (placeholder)
+    avg_image_quality_score = 85.0  # Placeholder
+    
+    # Seller response time average (placeholder - would need message/response tracking)
+    seller_response_time_avg = 24.0  # Placeholder in hours
+    
+    # Order fulfillment average days
+    fulfilled_orders = db.query(Order).filter(
+        Order.status.in_(["Shipped", "Delivered", "Paid"])
+    ).all()
+    
+    if fulfilled_orders:
+        total_days = 0
+        count = 0
+        for order in fulfilled_orders:
+            if order.created_at:
+                # Calculate days from creation to now (or to status change if tracked)
+                days_diff = (datetime.utcnow() - order.created_at).total_seconds() / 86400
+                total_days += days_diff
+                count += 1
+        order_fulfillment_avg_days = total_days / count if count > 0 else 0.0
+    else:
+        order_fulfillment_avg_days = 0.0
+    
+    return {
+        "out_of_stock_rate": round(out_of_stock_rate, 2),
+        "verified_listing_rate": round(verified_listing_rate, 2),
+        "avg_image_quality_score": round(avg_image_quality_score, 2),
+        "seller_response_time_avg": round(seller_response_time_avg, 2),
+        "order_fulfillment_avg_days": round(order_fulfillment_avg_days, 2)
+    }
+
 @app.post("/admin/sellers/approve/{user_id}", tags=["Admin"])
 def approve_seller(
     user_id: int,
@@ -1345,6 +2065,49 @@ def reject_seller(
     db.commit()
     return {"message": f"Seller {seller.username} rejected"}
 
+@app.post("/admin/sellers/block/{user_id}", tags=["Admin"])
+def block_seller(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Block a seller account (admin only) - sets is_active to False"""
+    seller = db.query(User).filter(
+        User.id == user_id,
+        User.role == "seller"
+    ).first()
+    
+    if not seller:
+        raise HTTPException(status_code=404, detail="Seller not found")
+    
+    seller.is_active = False
+    seller.is_approved = False
+    db.commit()
+    return {"message": f"Seller {seller.username} has been blocked"}
+
+@app.delete("/admin/sellers/{user_id}", tags=["Admin"])
+def delete_seller(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Delete a seller account (admin only) - permanently removes seller"""
+    seller = db.query(User).filter(
+        User.id == user_id,
+        User.role == "seller"
+    ).first()
+    
+    if not seller:
+        raise HTTPException(status_code=404, detail="Seller not found")
+    
+    # Delete seller's products first (cascade should handle this, but being explicit)
+    db.query(ProductModel).filter(ProductModel.seller_id == user_id).delete()
+    
+    # Delete the seller
+    db.delete(seller)
+    db.commit()
+    return {"message": f"Seller {seller.username} has been deleted"}
+
 @app.get("/admin/products/pending", response_model=list[ProductSchema], tags=["Admin"])
 def get_pending_products(
     db: Session = Depends(get_db),
@@ -1355,6 +2118,21 @@ def get_pending_products(
         ProductModel.is_verified == False
     ).order_by(ProductModel.id.desc()).all()
     return [normalize_product_gender(p) for p in products]
+
+@app.get("/admin/products/{product_id}", response_model=ProductSchema, tags=["Admin"])
+def get_admin_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get any product by ID (admin only) - includes unverified products"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    normalize_product_gender(product)
+    return product
 
 @app.post("/admin/products/verify/{product_id}", response_model=ProductSchema, tags=["Admin"])
 def verify_product(
@@ -1470,6 +2248,556 @@ def resend_otp(data: ResendOTPRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception("Failed to send OTP email: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Failed to send OTP email: {str(e)}. Please try again later.")
+
+# ==================== PASSWORD RESET ENDPOINTS ====================
+
+@app.post("/auth/forgot-password", tags=["Auth"])
+def forgot_password(
+    data: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Request password reset. Sends reset link to email if user exists.
+    Returns generic success message to prevent email enumeration.
+    """
+    email = data.email.strip().lower()
+    
+    # Check rate limiting
+    is_allowed, next_allowed = check_rate_limit(email, db)
+    if not is_allowed:
+        # Still return generic success, but log the rate limit
+        logger.warning(f"Rate limit exceeded for password reset: {email}")
+        # Return generic message even on rate limit to prevent enumeration
+        return {
+            "message": "Password reset instructions sent (if the email exists). Please check your email."
+        }
+    
+    # Check if user exists
+    user = db.query(User).filter(User.email == email).first()
+    
+    # Always return generic success message (security: prevent email enumeration)
+    generic_message = "Password reset instructions sent (if the email exists). Please check your email."
+    
+    if not user:
+        logger.info(f"Password reset requested for non-existent email: {email}")
+        return {"message": generic_message}
+    
+    try:
+        # Generate reset token
+        reset_token = create_reset_token(user, db)
+        
+        # Determine reset URL based on user role
+        # Get the origin from request headers or use default
+        origin = request.headers.get("origin", "http://localhost:5173") if request else "http://localhost:5173"
+        
+        # Determine the correct reset path based on role
+        if user.role == "admin" or user.is_admin:
+            reset_path = "/admin/reset-password"
+        elif user.role == "seller":
+            reset_path = "/seller/reset-password"
+        else:
+            reset_path = "/reset-password"
+        
+        reset_url = f"{origin}{reset_path}?email={email}&token={reset_token}"
+        
+        # Send password reset email
+        send_password_reset_email(user.email, reset_token, reset_url)
+        logger.info(f"Password reset email sent to: {email}")
+        
+        return {"message": generic_message}
+        
+    except ValueError as e:
+        logger.exception("Email configuration error: %s", str(e))
+        # Still return generic message
+        return {"message": generic_message}
+    except Exception as e:
+        logger.exception("Failed to send password reset email: %s", str(e))
+        # Still return generic message for security
+        return {"message": generic_message}
+
+
+@app.post("/auth/reset-password", tags=["Auth"])
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Reset password using token from email.
+    Validates token, checks expiration, and updates password.
+    """
+    email = data.email.strip().lower()
+    # Get otp_or_token (validator ensures at least one of token or otp_or_token is provided)
+    otp_or_token = (data.otp_or_token or data.token or "").strip()
+    if not otp_or_token:
+        raise HTTPException(status_code=400, detail="Either 'otp_or_token' or 'token' must be provided")
+    new_password = data.new_password
+    
+    # Validate password strength
+    try:
+        validate_password_strength(new_password, username=None, email=email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Validate token (check if it's a token or OTP)
+    # If it's 6 digits, treat as OTP; otherwise treat as token
+    is_otp = otp_or_token.isdigit() and len(otp_or_token) == 6
+    
+    if is_otp:
+        # OTP-based reset
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        if not user.otp or user.otp != otp_or_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid OTP. Please request a new password reset."
+            )
+        
+        if not user.otp_expiry or user.otp_expiry < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="OTP expired. Please request a new password reset."
+            )
+    else:
+        # Token-based reset
+        user = validate_reset_token(email, otp_or_token, db)
+        if not user:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired reset token. Please request a new password reset."
+            )
+    
+    # Check if new password equals old password
+    if verify_password(new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password cannot be from your previous passwords"
+        )
+    
+    try:
+        # Hash new password
+        hashed_password = hash_password(new_password)
+        
+        # Update password
+        user.hashed_password = hashed_password
+        
+        # Clear OTP/token fields
+        if is_otp:
+            user.otp = None
+            user.otp_expiry = None
+        else:
+            invalidate_reset_token(user, db)
+        
+        db.commit()
+        
+        # Send success email
+        try:
+            send_password_reset_success_email(user.email)
+        except Exception as e:
+            # Log but don't fail the reset if email fails
+            logger.warning(f"Failed to send password reset success email: {e}")
+        
+        logger.info(f"Password reset successful for user: {email}")
+        return {"message": "Password has been reset successfully. You can now login with your new password."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error resetting password: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to reset password. Please try again."
+        )
+
+# ==================== USER PASSWORD RESET ENDPOINTS (OTP-based) ====================
+
+@app.post("/users/forgot-password", tags=["Users"])
+def users_forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Request password reset using OTP.
+    Generates OTP and sends it to user's email.
+    """
+    email = data.email.strip().lower()
+    
+    # Check if user exists
+    user = db.query(User).filter(User.email == email).first()
+    
+    # Always return generic success message (security: prevent email enumeration)
+    generic_message = "Password reset OTP sent (if the email exists). Please check your email."
+    
+    if not user:
+        logger.info(f"Password reset OTP requested for non-existent email: {email}")
+        return {"message": generic_message}
+    
+    try:
+        # Generate OTP for password reset
+        otp = generate_otp()
+        expiry = datetime.utcnow() + timedelta(minutes=10)
+        
+        # Save OTP in user record
+        user.otp = otp
+        user.otp_expiry = expiry
+        db.commit()
+        
+        # Send OTP email
+        try:
+            send_otp_email(user.email, otp)
+            logger.info(f"Password reset OTP sent to: {email}")
+        except ValueError as e:
+            logger.exception("Email configuration error: %s", str(e))
+            # Still return generic message
+        except Exception as e:
+            logger.exception("Failed to send password reset OTP email: %s", str(e))
+            # Still return generic message for security
+        
+        return {"message": generic_message}
+        
+    except Exception as e:
+        logger.exception("Failed to process password reset request: %s", str(e))
+        db.rollback()
+        # Still return generic message for security
+        return {"message": generic_message}
+
+
+@app.post("/users/reset-password", tags=["Users"])
+def users_reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Reset password using OTP.
+    Validates OTP, checks if new password equals old password, and updates password.
+    """
+    email = data.email.strip().lower()
+    # Get otp_or_token (validator ensures at least one of token or otp_or_token is provided)
+    otp_or_token = (data.otp_or_token or data.token or "").strip()
+    if not otp_or_token:
+        raise HTTPException(status_code=400, detail="Either 'otp_or_token' or 'token' must be provided")
+    new_password = data.new_password
+    
+    # Find user by email
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Validate OTP (should be 6 digits for OTP-based reset)
+    if not otp_or_token.isdigit() or len(otp_or_token) != 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP format. OTP must be 6 digits."
+        )
+    
+    if not user.otp:
+        raise HTTPException(
+            status_code=400,
+            detail="No OTP found. Please request a new password reset."
+        )
+    
+    if user.otp != otp_or_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid OTP. Please check your email and try again."
+        )
+    
+    if not user.otp_expiry or user.otp_expiry < datetime.utcnow():
+        raise HTTPException(
+            status_code=400,
+            detail="OTP expired. Please request a new password reset."
+        )
+    
+    # Validate password strength
+    try:
+        validate_password_strength(new_password, username=user.username, email=user.email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Check if new password equals old password
+    if verify_password(new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password cannot be from your previous passwords"
+        )
+    
+    try:
+        # Hash new password
+        hashed_password = hash_password(new_password)
+        
+        # Update password
+        user.hashed_password = hashed_password
+        
+        # Clear OTP fields
+        user.otp = None
+        user.otp_expiry = None
+        
+        db.commit()
+        
+        # Send success email
+        try:
+            send_password_reset_success_email(user.email)
+        except Exception as e:
+            # Log but don't fail the reset if email fails
+            logger.warning(f"Failed to send password reset success email: {e}")
+        
+        logger.info(f"Password reset successful for user: {email}")
+        return {"message": "Password reset successful"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error resetting password: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to reset password. Please try again."
+        )
+
+# ==================== ADDRESS MANAGEMENT ENDPOINTS ====================
+
+@app.get("/profile/addresses", response_model=list[AddressResponse], tags=["Users"])
+def get_user_addresses(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get all addresses for the logged-in user"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    addresses = db.query(Address).filter(Address.user_id == user.id).order_by(
+        Address.is_default.desc(), Address.created_at.desc()
+    ).all()
+    return addresses
+
+
+@app.post("/profile/addresses", response_model=AddressResponse, tags=["Users"])
+def create_address(
+    address: AddressCreate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Create a new address for the logged-in user"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if this is the first address
+    existing_addresses = db.query(Address).filter(Address.user_id == user.id).count()
+    is_first_address = existing_addresses == 0
+    
+    # Create new address
+    new_address = Address(
+        user_id=user.id,
+        **address.model_dump(),
+        is_default=is_first_address  # First address is automatically default
+    )
+    db.add(new_address)
+    
+    # If this is the first address, update user.has_address
+    if is_first_address:
+        user.has_address = True
+    
+    db.commit()
+    db.refresh(new_address)
+    return new_address
+
+
+@app.put("/profile/addresses/{address_id}", response_model=AddressResponse, tags=["Users"])
+def update_address(
+    address_id: int,
+    address_update: AddressUpdate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Update an existing address"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    address = db.query(Address).filter(
+        Address.id == address_id,
+        Address.user_id == user.id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # Update only provided fields
+    update_data = address_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(address, field, value)
+    
+    address.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(address)
+    return address
+
+
+@app.delete("/profile/addresses/{address_id}", tags=["Users"])
+def delete_address(
+    address_id: int,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Delete an address. If it was default, set next available as default."""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    address = db.query(Address).filter(
+        Address.id == address_id,
+        Address.user_id == user.id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    was_default = address.is_default
+    
+    # Delete the address
+    db.delete(address)
+    
+    # If it was default, set next available as default
+    if was_default:
+        next_address = db.query(Address).filter(
+            Address.user_id == user.id
+        ).first()
+        if next_address:
+            next_address.is_default = True
+            db.commit()
+        else:
+            # No addresses left, update user.has_address
+            user.has_address = False
+            db.commit()
+    else:
+        db.commit()
+    
+    return {"message": "Address deleted successfully"}
+
+
+@app.post("/profile/addresses/{address_id}/set-default", response_model=AddressResponse, tags=["Users"])
+def set_default_address(
+    address_id: int,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Set an address as default"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    address = db.query(Address).filter(
+        Address.id == address_id,
+        Address.user_id == user.id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # Unset all other default addresses
+    db.query(Address).filter(
+        Address.user_id == user.id,
+        Address.is_default == True
+    ).update({"is_default": False})
+    
+    # Set this address as default
+    address.is_default = True
+    db.commit()
+    db.refresh(address)
+    return address
+
+
+@app.get("/profile/addresses/default", response_model=AddressResponse, tags=["Users"])
+def get_default_address(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get the default address for checkout"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    address = db.query(Address).filter(
+        Address.user_id == user.id,
+        Address.is_default == True
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="No default address found")
+    
+    return address
+
+
+# ==================== BACKWARD COMPATIBILITY: OLD /user/address ROUTES ====================
+
+@app.get("/user/address", response_model=list[AddressResponse], tags=["User"])
+def get_user_addresses_legacy(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get all addresses for the logged-in user (legacy endpoint)"""
+    return get_user_addresses(db, current_user)
+
+@app.post("/user/address", response_model=AddressResponse, tags=["User"])
+def create_address_legacy(
+    address: AddressCreate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Create a new address for the logged-in user (legacy endpoint)"""
+    return create_address(address, db, current_user)
+
+@app.put("/user/address/{address_id}", response_model=AddressResponse, tags=["User"])
+def update_address_legacy(
+    address_id: int,
+    address_update: AddressUpdate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Update an existing address (legacy endpoint)"""
+    return update_address(address_id, address_update, db, current_user)
+
+@app.delete("/user/address/{address_id}", tags=["User"])
+def delete_address_legacy(
+    address_id: int,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Delete an address (legacy endpoint)"""
+    return delete_address(address_id, db, current_user)
+
+@app.post("/user/address/{address_id}/set-default", response_model=AddressResponse, tags=["User"])
+def set_default_address_legacy(
+    address_id: int,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Set an address as default (legacy endpoint)"""
+    return set_default_address(address_id, db, current_user)
+
+@app.get("/user/address/default", response_model=AddressResponse, tags=["User"])
+def get_default_address_legacy(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get the default address for checkout (legacy endpoint)"""
+    return get_default_address(db, current_user)
+
+# Keep /user/profile for backward compatibility, but also add /profile/me above
+@app.get("/user/profile", tags=["User"])
+def get_user_profile_legacy(
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Get user profile including has_address status"""
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "has_address": user.has_address,
+        "role": user.role
+    }
 
 if __name__ == "__main__":
     import uvicorn

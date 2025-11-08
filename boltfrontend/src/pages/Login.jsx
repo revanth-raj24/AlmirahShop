@@ -38,16 +38,44 @@ export default function Login() {
       // Check user role and redirect accordingly
       const userRole = result.role || localStorage.getItem('userRole');
       
+      // Prevent admin and seller login through main app
+      if (userRole === 'admin') {
+        // Clear token and show error
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('userRole');
+        setError('Admin access is only available through the admin portal. Please use the dedicated admin login.');
+        setLoading(false);
+        return;
+      }
+      
+      if (userRole === 'seller') {
+        // Clear token and show error
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('userRole');
+        setError('Seller access is only available through the seller portal. Please use the dedicated seller login.');
+        setLoading(false);
+        return;
+      }
+      
+      // Check if user has address (for existing users)
+      try {
+        const { data: profile } = await API.get('/user/profile');
+        // If user doesn't have address, redirect to setup
+        if (!profile.has_address) {
+          navigate('/setup-address');
+          return;
+        }
+      } catch (err) {
+        // If profile fetch fails, continue to home
+        console.error('Failed to fetch profile:', err);
+      }
+
       // Check if there's a returnUrl to redirect back to
       const returnUrl = searchParams.get('returnUrl');
       if (returnUrl) {
         navigate(decodeURIComponent(returnUrl));
-      } else if (userRole === 'admin') {
-        // Redirect admins to admin dashboard
-        navigate('/admin/dashboard');
-      } else if (userRole === 'seller') {
-        // Redirect sellers to seller dashboard
-        navigate('/seller/dashboard');
       } else {
         navigate('/');
       }
@@ -100,9 +128,9 @@ export default function Login() {
           />
 
           <div className="text-right">
-            <a href="#" className="text-sm text-neutral-600 hover:text-neutral-900 transition-colors duration-300">
+            <Link to="/forgot-password" className="text-sm text-neutral-600 hover:text-neutral-900 transition-colors duration-300">
               Forgot password?
-            </a>
+            </Link>
           </div>
 
           <Button type="submit" disabled={loading} className="w-full">

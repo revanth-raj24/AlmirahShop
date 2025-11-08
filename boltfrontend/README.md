@@ -1,4 +1,4 @@
-# AlmirahShop - eCommerce Platform
+# The Almirah Shop
 
 underconstruction eCommerce web application with a minimalistic "old-money" aesthetic, built with modern web technologies.
 
