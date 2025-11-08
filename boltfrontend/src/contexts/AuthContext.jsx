@@ -29,6 +29,19 @@ export function AuthProvider({ children }) {
           setUser(null);
           return;
         } catch (adminErr) {
+          // 403 is expected for non-admin users - ignore it
+          // Only handle non-403 errors (like 401 which means invalid token)
+          if (adminErr?.response?.status !== 403 && adminErr?.response?.status !== 404) {
+            // If it's not a 403/404, might be auth issue - clear token
+            if (adminErr?.response?.status === 401) {
+              localStorage.removeItem('token');
+              localStorage.removeItem('username');
+              localStorage.removeItem('userRole');
+              setUser(null);
+              return;
+            }
+          }
+          
           // Not an admin, check if seller - if so, clear token (seller should use seller portal)
           try {
             await API.get('/seller/products');
@@ -39,6 +52,18 @@ export function AuthProvider({ children }) {
             setUser(null);
             return;
           } catch (sellerErr) {
+            // 403 is expected for non-seller users - ignore it
+            // Only handle non-403 errors
+            if (sellerErr?.response?.status !== 403 && sellerErr?.response?.status !== 404) {
+              // If it's not a 403/404, might be auth issue - clear token
+              if (sellerErr?.response?.status === 401) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('username');
+                localStorage.removeItem('userRole');
+                setUser(null);
+                return;
+              }
+            }
             // Not a seller, default to customer
             localStorage.setItem('userRole', 'customer');
             setUser(prev => ({ ...prev, role: 'customer' }));
@@ -119,6 +144,12 @@ export function AuthProvider({ children }) {
         if (adminErr.message && adminErr.message.includes('admin portal')) {
           throw adminErr;
         }
+        // 403 is expected for non-admin users - continue to seller check
+        // Only throw if it's a different error (like network error)
+        if (adminErr?.response?.status && adminErr?.response?.status !== 403 && adminErr?.response?.status !== 404) {
+          // If it's not a 403/404, might be a real error - but continue anyway
+        }
+        
         // Not an admin, check if seller - if seller, don't allow login in main app
         try {
           await API.get('/seller/products');
@@ -130,6 +161,11 @@ export function AuthProvider({ children }) {
         } catch (sellerErr) {
           if (sellerErr.message && sellerErr.message.includes('seller portal')) {
             throw sellerErr;
+          }
+          // 403 is expected for non-seller users - default to customer
+          // Only throw if it's a different error
+          if (sellerErr?.response?.status && sellerErr?.response?.status !== 403 && sellerErr?.response?.status !== 404) {
+            // If it's not a 403/404, might be a real error - but continue anyway
           }
           // Not a seller, default to customer
           userRole = 'customer';

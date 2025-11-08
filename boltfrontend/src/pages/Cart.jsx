@@ -4,6 +4,7 @@ import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Trash2, Plus, Minus, ShoppingBag, X, MapPin, Home, Building2, Tag } from 'lucide-react';
 import Button from '../components/Button';
+import { resolveImageUrl } from '../utils/imageUtils';
 
 export default function Cart() {
   const { user } = useAuth();
@@ -257,7 +258,7 @@ export default function Cart() {
                 >
                   <div className="w-32 h-40 bg-neutral-100 flex-shrink-0 rounded overflow-hidden">
                     <img
-                      src={product.image_url || 'https://via.placeholder.com/400x533?text=Product'}
+                      src={resolveImageUrl(product.image_url)}
                       alt={product.name}
                       className="w-full h-full object-cover"
                     />

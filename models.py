@@ -17,6 +17,11 @@ class Product(Base):
     seller_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     is_verified = Column(Boolean, default=False, index=True)
     
+    # Product verification fields
+    verification_status = Column(String, default="Pending", index=True)  # "Pending", "Approved", "Rejected"
+    verification_notes = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=True)
+    
     seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
 
 class User(Base):
@@ -79,6 +84,17 @@ class Order(Base):
     status = Column(String, default="Pending")  # e.g. Pending, Paid, Shipped, Cancelled
     created_at = Column(DateTime, default=datetime.utcnow)
     delivery_address = Column(JSON, nullable=True)  # Snapshot of address at order time
+    
+    # Shipping snapshot fields (denormalized at order time)
+    ship_name = Column(String, nullable=True)
+    ship_phone = Column(String, nullable=True)
+    ship_address_line1 = Column(String, nullable=True)
+    ship_address_line2 = Column(String, nullable=True)
+    ship_city = Column(String, nullable=True)
+    ship_state = Column(String, nullable=True)
+    ship_country = Column(String, nullable=True)
+    ship_pincode = Column(String, nullable=True)
+    ordered_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
@@ -114,6 +130,19 @@ class OrderItem(Base):
     product_id = Column(Integer, ForeignKey("products.id"))
     quantity = Column(Integer, default=1)
     price = Column(Float, nullable=False)  # price at time of purchase
+    
+    # Seller routing fields
+    seller_id = Column(Integer, index=True, nullable=True)  # copy from product.seller_id at order creation
+    status = Column(String, default="Pending", index=True)  # "Pending", "Accepted", "Rejected", "Packed", "Shipped", "Delivered", "Cancelled"
+    rejection_reason = Column(String, nullable=True)
+
+    # Return fields
+    return_status = Column(String, default="None", index=True)  # "None", "ReturnRequested", "ReturnAccepted", "ReturnRejected", "ReturnInTransit", "ReturnReceived", "RefundProcessed"
+    return_reason = Column(Text, nullable=True)
+    return_notes = Column(Text, nullable=True)
+    return_requested_at = Column(DateTime, nullable=True)
+    return_processed_at = Column(DateTime, nullable=True)
+    is_return_eligible = Column(Boolean, default=True)
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")

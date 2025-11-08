@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle } from 'lucide-react';
 import Button from '../components/Button';
 import Input from '../components/Input';
+import { resolveImageUrl } from '../utils/imageUtils';
 
 export default function SellerDashboard() {
   const { user } = useAuth();
@@ -371,11 +372,13 @@ export default function SellerDashboard() {
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.map((product) => (
+              {products.map((product) => {
+                const imageUrl = resolveImageUrl(product.image_url);
+                return (
                 <div key={product.id} className="bg-white border border-neutral-300 p-4">
                   <div className="aspect-[3/4] bg-neutral-100 mb-4 overflow-hidden">
-                    {product.image_url ? (
-                      <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+                    {imageUrl ? (
+                      <img src={imageUrl} alt={product.name} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-neutral-400">
                         No Image
@@ -416,7 +419,8 @@ export default function SellerDashboard() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {products.length === 0 && (

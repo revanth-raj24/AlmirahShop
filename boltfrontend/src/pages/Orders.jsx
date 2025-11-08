@@ -48,6 +48,12 @@ export default function Orders() {
   const getStatusIcon = (status) => {
     const normalized = (status || '').toLowerCase();
     switch (normalized) {
+      case 'active':
+        return <Package className="w-5 h-5 text-blue-600" />;
+      case 'completed':
+        return <CheckCircle className="w-5 h-5 text-green-600" />;
+      case 'cancelled':
+        return <XCircle className="w-5 h-5 text-red-600" />;
       case 'pending':
         return <Package className="w-5 h-5 text-neutral-600" />;
       case 'processing':
@@ -56,8 +62,6 @@ export default function Orders() {
         return <Truck className="w-5 h-5 text-blue-600" />;
       case 'delivered':
         return <CheckCircle className="w-5 h-5 text-green-600" />;
-      case 'cancelled':
-        return <XCircle className="w-5 h-5 text-red-600" />;
       default:
         return <Package className="w-5 h-5 text-neutral-600" />;
     }
@@ -66,6 +70,12 @@ export default function Orders() {
   const getStatusColor = (status) => {
     const normalized = (status || '').toLowerCase();
     switch (normalized) {
+      case 'active':
+        return 'text-blue-600';
+      case 'completed':
+        return 'text-green-600';
+      case 'cancelled':
+        return 'text-red-600';
       case 'pending':
         return 'text-neutral-600';
       case 'processing':
@@ -74,8 +84,6 @@ export default function Orders() {
         return 'text-blue-600';
       case 'delivered':
         return 'text-green-600';
-      case 'cancelled':
-        return 'text-red-600';
       default:
         return 'text-neutral-600';
     }
@@ -162,7 +170,7 @@ export default function Orders() {
                     </span>
                   </div>
                   <p className="text-neutral-600 text-sm">
-                    Order placed on {new Date(order.created_at).toLocaleDateString('en-US', {
+                    Order #{order.id} • Placed on {new Date(order.created_at).toLocaleDateString('en-US', {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric',
@@ -182,9 +190,30 @@ export default function Orders() {
                   // Use product from order item if available, otherwise fallback to productById
                   const p = item.product || productById.get(item.product_id) || {};
                   const imageUrl = resolveImageUrl(p.image_url);
+                  const itemStatus = item.status || 'Pending';
+                  
+                  // Get status color for item
+                  const getItemStatusColor = (status) => {
+                    const normalized = (status || '').toLowerCase();
+                    switch (normalized) {
+                      case 'pending':
+                        return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+                      case 'accepted':
+                        return 'bg-blue-100 text-blue-700 border-blue-200';
+                      case 'rejected':
+                        return 'bg-red-100 text-red-700 border-red-200';
+                      case 'shipped':
+                        return 'bg-purple-100 text-purple-700 border-purple-200';
+                      case 'delivered':
+                        return 'bg-green-100 text-green-700 border-green-200';
+                      default:
+                        return 'bg-neutral-100 text-neutral-700 border-neutral-200';
+                    }
+                  };
+                  
                   return (
-                    <div key={item.id} className="flex gap-4">
-                      <div className="w-20 h-24 bg-neutral-100 flex items-center justify-center overflow-hidden">
+                    <div key={item.id} className="flex gap-4 p-4 border border-neutral-200 rounded-lg hover:border-neutral-300 transition-colors">
+                      <div className="w-20 h-24 bg-neutral-100 flex items-center justify-center overflow-hidden rounded">
                         <img
                           src={imageUrl}
                           alt={p.name || 'Product'}
@@ -194,31 +223,50 @@ export default function Orders() {
                       <div className="flex-1">
                         <h3 className="font-serif text-lg text-neutral-900 mb-1">{p.name || 'Product'}</h3>
                         <p className="text-neutral-600 text-sm mb-2">Quantity: {item.quantity}</p>
-                        <p className="font-sans text-neutral-900">
+                        <p className="font-sans text-neutral-900 mb-2">
                           ${parseFloat(item.price).toFixed(2)} each
                         </p>
+                        {/* Seller Name */}
+                        {p.seller_username && (
+                          <p className="text-xs text-neutral-500 mb-2">
+                            Sold by: <span className="font-medium text-neutral-700">{p.seller_username}</span>
+                          </p>
+                        )}
+                        {/* Item Status Badge */}
+                        <div className="mt-2">
+                          <span className={`px-2 py-1 text-xs rounded border font-medium ${getItemStatusColor(itemStatus)}`}>
+                            {itemStatus}
+                          </span>
+                          {item.rejection_reason && (
+                            <p className="text-xs text-red-600 mt-1">Reason: {item.rejection_reason}</p>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="font-sans text-neutral-900 font-medium mb-2">
-                          ${(parseFloat(item.price) * item.quantity).toFixed(2)}
-                        </p>
-                        {canReturnItem(item) && (
-                          <button
-                            onClick={() => handleRequestReturn(item)}
-                            className="px-3 py-1.5 text-sm border border-neutral-300 text-neutral-700 hover:bg-neutral-50 transition-colors flex items-center gap-1"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            Return Item
-                          </button>
-                        )}
-                        {item.return_status && item.return_status !== 'None' && (
-                          <button
-                            onClick={() => navigate('/profile/returns')}
-                            className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 hover:bg-blue-50 transition-colors"
-                          >
-                            View Return Status
-                          </button>
-                        )}
+                      <div className="text-right flex flex-col justify-between">
+                        <div>
+                          <p className="font-sans text-neutral-900 font-medium mb-2">
+                            ${(parseFloat(item.price) * item.quantity).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {canReturnItem(item) && (
+                            <button
+                              onClick={() => handleRequestReturn(item)}
+                              className="px-3 py-1.5 text-sm border border-neutral-300 text-neutral-700 hover:bg-neutral-50 transition-colors flex items-center gap-1 justify-center"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                              Return Item
+                            </button>
+                          )}
+                          {item.return_status && item.return_status !== 'None' && (
+                            <button
+                              onClick={() => navigate('/profile/returns')}
+                              className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 hover:bg-blue-50 transition-colors"
+                            >
+                              View Return Status
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );

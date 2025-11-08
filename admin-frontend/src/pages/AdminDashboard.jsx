@@ -8,6 +8,7 @@ import {
   UserPlus, PackageCheck, Clock, AlertTriangle, RefreshCw, Activity, Heart,
   ArrowUpRight, ArrowDownRight
 } from 'lucide-react';
+import { resolveImageUrl } from '../utils/imageUtils';
 import Button from '../components/Button';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
@@ -326,9 +327,9 @@ export default function AdminDashboard() {
             </div>
           </button>
           <button
-            onClick={() => setActiveTab('products')}
+            onClick={() => navigate('/admin/products/pending')}
             className={`px-6 py-3 font-medium transition-colors whitespace-nowrap ${
-              activeTab === 'products'
+              window.location.pathname === '/admin/products/pending'
                 ? 'border-b-2 border-neutral-900 text-neutral-900'
                 : 'text-neutral-600 hover:text-neutral-900'
             }`}
@@ -850,44 +851,21 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Products Tab */}
+        {/* Products Tab - Redirect to dedicated page */}
         {activeTab === 'products' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {pendingProducts.map((product) => (
-              <div key={product.id} className="bg-white border border-neutral-300 rounded-lg p-4 shadow-sm">
-                <div className="aspect-[3/4] bg-neutral-100 mb-4 overflow-hidden rounded">
-                  {product.image_url ? (
-                    <img
-                      src={product.image_url}
-                      alt={product.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-neutral-400">
-                      No Image
-                    </div>
-                  )}
-                </div>
-                <h3 className="font-serif text-lg mb-2">{product.name}</h3>
-                <p className="text-sm text-neutral-600 mb-2 line-clamp-2">{product.description}</p>
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-lg font-medium text-neutral-900">${product.price}</p>
-                </div>
-                <Button
-                  onClick={() => handleVerifyProduct(product.id)}
-                  className="w-full flex items-center justify-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  Verify Product
-                </Button>
-              </div>
-            ))}
-            {pendingProducts.length === 0 && (
-              <div className="col-span-full text-center py-12">
-                <PackageCheck className="w-12 h-12 mx-auto mb-2 text-green-500" />
-                <p className="text-neutral-600">No pending products</p>
-              </div>
-            )}
+          <div className="bg-white border border-neutral-300 rounded-lg shadow-sm p-12 text-center">
+            <Package className="w-16 h-16 mx-auto mb-4 text-neutral-400" />
+            <h3 className="font-serif text-xl text-neutral-900 mb-2">Product Verification</h3>
+            <p className="text-neutral-600 mb-6">
+              Use the dedicated product verification page to review and approve seller-submitted products.
+            </p>
+            <Button
+              onClick={() => navigate('/admin/products/pending')}
+              className="inline-flex items-center gap-2"
+            >
+              <Eye className="w-4 h-4" />
+              Go to Product Verification
+            </Button>
           </div>
         )}
 
@@ -1076,7 +1054,7 @@ export default function AdminDashboard() {
                                 {item.product?.image_url && (
                                   <div className="w-24 h-24 bg-neutral-100 rounded overflow-hidden flex-shrink-0">
                                     <img
-                                      src={item.product.image_url}
+                                      src={resolveImageUrl(item.product.image_url)}
                                       alt={item.product.name || 'Product'}
                                       className="w-full h-full object-cover"
                                     />
@@ -1108,7 +1086,7 @@ export default function AdminDashboard() {
                                     </div>
                                   </div>
                                   {item.product && (
-                                    <div className="mt-2 flex gap-2">
+                                    <div className="mt-2 flex gap-2 flex-wrap">
                                       {item.product.gender && (
                                         <span className="px-2 py-1 text-xs bg-neutral-100 text-neutral-700 rounded capitalize">
                                           {item.product.gender}
@@ -1121,6 +1099,31 @@ export default function AdminDashboard() {
                                       )}
                                     </div>
                                   )}
+                                  <div className="mt-3 pt-3 border-t border-neutral-200">
+                                    <div className="flex items-center justify-between">
+                                      <div>
+                                        <span className="text-xs text-neutral-600">Seller Status: </span>
+                                        <span className={`px-2 py-1 text-xs rounded font-medium ${
+                                          item.status === 'Accepted' ? 'bg-green-100 text-green-700' :
+                                          item.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                                          item.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                                          'bg-neutral-100 text-neutral-700'
+                                        }`}>
+                                          {item.status || 'Pending'}
+                                        </span>
+                                      </div>
+                                      {item.product?.seller_username && (
+                                        <div className="text-xs text-neutral-600">
+                                          Seller: <span className="font-medium text-neutral-900">{item.product.seller_username}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                    {item.rejection_reason && (
+                                      <div className="mt-2 text-xs text-red-600">
+                                        Rejection reason: {item.rejection_reason}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             </div>

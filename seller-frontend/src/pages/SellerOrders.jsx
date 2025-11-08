@@ -93,8 +93,18 @@ export default function SellerOrders() {
     <div className="min-h-screen bg-neutral-50 py-16 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto">
         <div className="mb-8">
-          <h1 className="font-serif text-3xl text-neutral-900 mb-2">My Orders</h1>
-          <p className="text-neutral-600">Manage and track your order items</p>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="font-serif text-3xl text-neutral-900 mb-2">My Orders</h1>
+              <p className="text-neutral-600">Manage and track your order items</p>
+            </div>
+            <button
+              onClick={() => navigate('/seller/dashboard')}
+              className="px-4 py-2 text-sm bg-neutral-300 text-neutral-900 hover:bg-neutral-400 rounded transition-colors"
+            >
+              ← Back to Dashboard
+            </button>
+          </div>
         </div>
 
         {/* Filters */}
