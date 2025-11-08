@@ -1,18 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Trash2, Plus, Minus, ShoppingBag, X } from 'lucide-react';
+import { Trash2, Plus, Minus, ShoppingBag, X, MapPin, Home, Building2, Tag } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function Cart() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [cartItems, setCartItems] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingItems, setUpdatingItems] = useState(new Set());
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
 
   useEffect(() => {
     if (!user) {
@@ -20,17 +24,29 @@ export default function Cart() {
       return;
     }
     fetchAll();
-  }, [user]);
+  }, [user, location.pathname]);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: cart }, { data: prods }] = await Promise.all([
+      const [{ data: cart }, { data: prods }, profileRes, addressesRes] = await Promise.all([
         API.get('/cart'),
         API.get('/products'),
+        API.get('/user/profile').catch(() => ({ data: null })),
+        API.get('/profile/addresses').catch(() => ({ data: [] })),
       ]);
       setCartItems(cart || []);
       setProducts(prods || []);
+      setUserProfile(profileRes?.data);
+      setAddresses(addressesRes?.data || []);
+      
+      // Set default address as selected
+      const defaultAddress = addressesRes?.data?.find(addr => addr.is_default);
+      if (defaultAddress) {
+        setSelectedAddressId(defaultAddress.id);
+      } else if (addressesRes?.data?.length > 0) {
+        setSelectedAddressId(addressesRes.data[0].id);
+      }
     } catch (err) {
       console.error('Failed to fetch cart:', err);
       setCartItems([]);
@@ -129,13 +145,40 @@ export default function Cart() {
       alert('Your cart is empty');
       return;
     }
+
+    // Validate address
+    if (!userProfile?.has_address) {
+      const shouldAdd = confirm('You must add a delivery address before placing an order. Would you like to add one now?');
+      if (shouldAdd) {
+        navigate('/setup-address?returnUrl=/cart');
+      }
+      return;
+    }
+
+    if (addresses.length === 0) {
+      alert('No addresses found. Please add a delivery address.');
+      navigate('/setup-address?returnUrl=/cart');
+      return;
+    }
+
+    if (!selectedAddressId) {
+      alert('Please select a delivery address');
+      return;
+    }
+
     setCheckoutLoading(true);
     try {
-      await API.post('/orders/create');
+      await API.post(`/orders/create?address_id=${selectedAddressId}`);
       alert('Order placed successfully!');
       navigate('/orders');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to place order. Please try again.');
+      const errorMsg = err?.response?.data?.detail || 'Failed to place order. Please try again.';
+      if (errorMsg.includes('Address required')) {
+        alert('You must add a delivery address before placing an order.');
+        navigate('/setup-address?returnUrl=/cart');
+      } else {
+        alert(errorMsg);
+      }
     } finally {
       setCheckoutLoading(false);
     }
@@ -280,7 +323,81 @@ export default function Cart() {
           </div>
 
           <div className="lg:col-span-1">
-            <div className="bg-white border border-neutral-300/20 p-8 rounded-lg sticky top-24">
+            <div className="bg-white border border-neutral-300/20 p-8 rounded-lg sticky top-24 space-y-6">
+              {/* Address Selection */}
+              {addresses.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-serif text-lg text-neutral-900">Delivery Address</h3>
+                    <button
+                      onClick={() => navigate('/profile/addresses')}
+                      className="text-sm text-neutral-600 hover:text-neutral-900"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {addresses.map((address) => {
+                      const getTagIcon = (tag) => {
+                        switch (tag) {
+                          case 'home':
+                            return <Home className="w-4 h-4" />;
+                          case 'office':
+                            return <Building2 className="w-4 h-4" />;
+                          default:
+                            return <Tag className="w-4 h-4" />;
+                        }
+                      };
+                      
+                      return (
+                        <label
+                          key={address.id}
+                          className={`block p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                            selectedAddressId === address.id
+                              ? 'border-neutral-900 bg-neutral-50'
+                              : 'border-neutral-200 hover:border-neutral-300'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="radio"
+                              name="address"
+                              value={address.id}
+                              checked={selectedAddressId === address.id}
+                              onChange={() => setSelectedAddressId(address.id)}
+                              className="mt-1"
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                {getTagIcon(address.tag)}
+                                <span className="text-sm font-medium text-neutral-900 capitalize">
+                                  {address.tag}
+                                </span>
+                                {address.is_default && (
+                                  <span className="px-2 py-0.5 text-xs bg-neutral-900 text-white rounded">
+                                    Default
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-neutral-700">
+                                {address.full_name} • {address.phone_number}
+                              </p>
+                              <p className="text-sm text-neutral-600">
+                                {address.address_line_1}
+                                {address.address_line_2 && `, ${address.address_line_2}`}
+                              </p>
+                              <p className="text-sm text-neutral-600">
+                                {address.city}, {address.state} {address.pincode}
+                              </p>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <h2 className="font-serif text-2xl text-neutral-900 mb-6">Order Summary</h2>
 
               <div className="space-y-4 mb-6">

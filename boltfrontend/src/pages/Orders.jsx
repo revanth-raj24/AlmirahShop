@@ -22,12 +22,10 @@ export default function Orders() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: ordersData }, { data: prods }] = await Promise.all([
-        API.get('/orders'),
-        API.get('/products'),
-      ]);
+      const { data: ordersData } = await API.get('/orders');
       setOrders(ordersData || []);
-      setProducts(prods || []);
+      // Products are now included in order items, no need to fetch separately
+      setProducts([]);
     } catch (_) {
       setOrders([]);
       setProducts([]);
@@ -139,7 +137,8 @@ export default function Orders() {
 
               <div className="space-y-4">
                 {(order.order_items || []).map((item) => {
-                  const p = productById.get(item.product_id) || {};
+                  // Use product from order item if available, otherwise fallback to productById
+                  const p = item.product || productById.get(item.product_id) || {};
                   const imageUrl = p.image_url || 'https://via.placeholder.com/400x533?text=Product';
                   return (
                     <div key={item.id} className="flex gap-4">

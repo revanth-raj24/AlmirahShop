@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
+import re
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -106,3 +107,98 @@ def customer_only(
             detail="Customer access required"
         )
     return current_user_obj
+
+# ==================== VALIDATION FUNCTIONS ====================
+
+def validate_username(username: str) -> None:
+    """
+    Validate username according to rules:
+    - Length 3-20
+    - Allowed: letters, digits, underscore, dot
+    - Must start with a letter
+    - No consecutive special chars (._)
+    - Cannot end with a special char
+    
+    Raises ValueError with clear message if invalid.
+    """
+    if not username:
+        raise ValueError("Username is required")
+    
+    username = username.strip()
+    
+    # Length check
+    if len(username) < 3:
+        raise ValueError("Username must be at least 3 characters long")
+    if len(username) > 20:
+        raise ValueError("Username must be at most 20 characters long")
+    
+    # Regex pattern: ^[A-Za-z](?:[A-Za-z0-9]|[._](?=[A-Za-z0-9])){2,19}$
+    # This ensures:
+    # - Starts with letter
+    # - Followed by 2-19 chars that are either alphanumeric OR special chars followed by alphanumeric
+    # - Effectively prevents consecutive special chars and ending with special char
+    pattern = r'^[A-Za-z](?:[A-Za-z0-9]|[._](?=[A-Za-z0-9])){2,19}$'
+    
+    if not re.match(pattern, username):
+        raise ValueError(
+            "Username must start with a letter, contain only letters, digits, underscores, and dots. "
+            "No consecutive special characters allowed, and cannot end with a special character."
+        )
+
+
+def validate_password_strength(password: str, username: str | None = None, email: str | None = None) -> None:
+    """
+    Validate password strength according to rules:
+    - Length 10-64
+    - Must include: at least one lowercase, one uppercase, one digit, one special
+    - No whitespace
+    - Must NOT contain the username (case-insensitive)
+    - If email provided, must NOT contain the part before '@' (case-insensitive)
+    - Must NOT be in denylist of common passwords
+    
+    Raises ValueError with clear message if invalid.
+    """
+    if not password:
+        raise ValueError("Password is required")
+    
+    # Length check
+    if len(password) < 10:
+        raise ValueError("Password must be at least 10 characters long")
+    if len(password) > 64:
+        raise ValueError("Password must be at most 64 characters long")
+    
+    # Whitespace check
+    if re.search(r'\s', password):
+        raise ValueError("Password cannot contain whitespace")
+    
+    # Base regex: must have lowercase, uppercase, digit, and special char
+    # ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{};:'\",.<>/?\\|`~])\S{10,64}$
+    base_pattern = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=\[\]{};:\'",.<>/?\\|`~])\S{10,64}$'
+    
+    if not re.match(base_pattern, password):
+        raise ValueError(
+            "Password must contain at least one lowercase letter, one uppercase letter, "
+            "one digit, and one special character (!@#$%^&*()_+-=[]{};:'\",.<>/?\\|`~)"
+        )
+    
+    # Check for username in password (case-insensitive)
+    if username:
+        username_lower = username.lower()
+        password_lower = password.lower()
+        if username_lower in password_lower:
+            raise ValueError("Password cannot contain your username")
+    
+    # Check for email local part (before @) in password (case-insensitive)
+    if email:
+        email_local_part = email.split('@')[0].lower() if '@' in email else email.lower()
+        password_lower = password.lower()
+        if email_local_part and len(email_local_part) >= 3 and email_local_part in password_lower:
+            raise ValueError("Password cannot contain your email address")
+    
+    # Denylist check
+    common_passwords = {
+        "password", "Password123", "123456", "123456789", "qwerty",
+        "letmein", "admin", "welcome", "iloveyou", "abc123"
+    }
+    if password in common_passwords:
+        raise ValueError("Password is too common. Please choose a stronger password.")

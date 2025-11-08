@@ -91,33 +91,42 @@ export default function Navbar() {
                   <User className="w-5 h-5" />
                 </button>
                 <div className="absolute right-0 top-full mt-2 w-48 bg-white border border-neutral-300/20 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300">
-                  {user?.role === 'admin' && (
-                    <Link
-                      to="/admin/dashboard"
-                      className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
-                    >
-                      Admin Dashboard
-                    </Link>
-                  )}
-                  {user?.role === 'seller' && (
-                    <Link
-                      to="/seller/dashboard"
-                      className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
-                    >
-                      Seller Dashboard
-                    </Link>
-                  )}
                   <Link
-                    to="/orders"
+                    to="/profile"
+                    className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                  >
+                    My Profile
+                  </Link>
+                  <Link
+                    to="/profile/orders"
                     className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
                   >
                     My Orders
                   </Link>
+                  <Link
+                    to="/profile/wishlist"
+                    className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                  >
+                    My Wishlist
+                  </Link>
+                  <Link
+                    to="/profile/addresses"
+                    className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                  >
+                    My Addresses
+                  </Link>
+                  <Link
+                    to="/profile/change-password"
+                    className="block px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
+                  >
+                    Change Password
+                  </Link>
+                  <div className="border-t border-neutral-300/20 my-1"></div>
                   <button
                     onClick={handleSignOut}
                     className="block w-full text-left px-4 py-3 text-sm text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors duration-300"
                   >
-                    Sign Out
+                    Logout
                   </button>
                 </div>
               </div>
@@ -128,12 +137,6 @@ export default function Navbar() {
                   className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
                 >
                   Login
-                </Link>
-                <Link
-                  to="/seller/login"
-                  className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
-                >
-                  Sell
                 </Link>
               </>
             )}

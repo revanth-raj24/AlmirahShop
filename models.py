@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Text, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 from database import Base
@@ -33,16 +33,28 @@ class User(Base):
     otp = Column(String, nullable=True)
     otp_expiry = Column(DateTime, nullable=True)
 
+    # Password Reset
+    reset_token = Column(String, nullable=True, index=True)
+    reset_token_expires = Column(DateTime, nullable=True)
+
     # Roles
     is_admin = Column(Boolean, default=False)
     role = Column(String, default="customer", index=True)  # "customer", "seller", "admin"
     is_approved = Column(Boolean, default=False)  # For sellers: must be approved by admin
+    
+    # Address Management
+    has_address = Column(Boolean, default=False)  # True if user has at least one address
+
+    # Profile Details
+    gender = Column(String, nullable=True)  # "male", "female", "other"
+    dob = Column(DateTime, nullable=True)  # Date of birth
 
     # Relationships
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
     wishlist_items = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user")
     products = relationship("Product", back_populates="seller", foreign_keys="Product.seller_id")
+    addresses = relationship("Address", back_populates="user", cascade="all, delete-orphan")
 
 
 class CartItem(Base):
@@ -66,9 +78,32 @@ class Order(Base):
     total_price = Column(Float, default=0.0)
     status = Column(String, default="Pending")  # e.g. Pending, Paid, Shipped, Cancelled
     created_at = Column(DateTime, default=datetime.utcnow)
+    delivery_address = Column(JSON, nullable=True)  # Snapshot of address at order time
 
     user = relationship("User", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+
+
+# ----- Address model -----
+class Address(Base):
+    __tablename__ = "addresses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    full_name = Column(String, nullable=False)
+    phone_number = Column(String, nullable=False)
+    address_line_1 = Column(String, nullable=False)
+    address_line_2 = Column(String, nullable=True)
+    landmark = Column(String, nullable=True)
+    city = Column(String, nullable=False)
+    state = Column(String, nullable=False)
+    pincode = Column(String, nullable=False)
+    tag = Column(String, default="home")  # "home", "office", "other"
+    is_default = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", back_populates="addresses")
 
 
 class OrderItem(Base):
