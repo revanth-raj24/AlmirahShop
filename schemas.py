@@ -1,6 +1,7 @@
 from pydantic import BaseModel, model_validator
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime
+import json
 
 class ProductBase(BaseModel):
     name: str
@@ -10,6 +11,12 @@ class ProductBase(BaseModel):
     discounted_price: float | None = None
     gender: Literal['men','women','unisex'] | None = None
     category: str | None = None
+    sizes: List[str] | None = None  # ["S", "M", "L", "XL", "XXL"]
+    colors: List[str] | None = None  # ["Red", "Blue", "Black"]
+    variants: Dict[str, str] | None = None  # {"Red": "/images/red.jpg", "Blue": "/images/blue.jpg"}
+    size_fit: str | None = None
+    material_care: str | None = None
+    specifications: Dict[str, str] | None = None  # {"Fabric": "Cotton", "Fit": "Regular"}
 
 class ProductCreate(ProductBase):
     pass
@@ -28,6 +35,15 @@ class Product(BaseModel):
     verification_status: str | None = None
     verification_notes: str | None = None
     submitted_at: datetime | None = None
+    sizes: List[str] | None = None
+    colors: List[str] | None = None
+    variants: Dict[str, str] | None = None  # Legacy JSON field
+    size_fit: str | None = None
+    material_care: str | None = None
+    specifications: Dict[str, str] | None = None
+    average_rating: float | None = None  # Computed field
+    total_reviews: int | None = None  # Computed field
+    product_variants: List["VariantResponse"] = []  # New variant system
 
     class Config:
         from_attributes = True
@@ -100,12 +116,19 @@ class SellerResponse(BaseModel):
 
 class CartItemCreate(BaseModel):
     product_id: int
+    variant_id: int | None = None  # Required if product has variants
     quantity: int
+    size: str | None = None  # Legacy: kept for backward compatibility
+    color: str | None = None  # Legacy: kept for backward compatibility
 
 class CartItemResponse(BaseModel):
     id: int
     product_id: int
+    variant_id: int | None = None
     quantity: int
+    size: str | None = None  # Legacy
+    color: str | None = None  # Legacy
+    variant: Optional["VariantResponse"] = None
 
     class Config:
         from_attributes = True
@@ -118,11 +141,16 @@ class CartItemQuantityUpdate(BaseModel):
 class OrderItemResponse(BaseModel):
     id: int
     product_id: int
+    variant_id: int | None = None
     quantity: int
     price: float
     seller_id: Optional[int] = None
     status: Optional[str] = "Pending"
     rejection_reason: Optional[str] = None
+    # Variant snapshot fields
+    variant_size: Optional[str] = None
+    variant_color: Optional[str] = None
+    variant_image_url: Optional[str] = None
     # Return fields
     return_status: Optional[str] = "None"
     return_reason: Optional[str] = None
@@ -131,6 +159,7 @@ class OrderItemResponse(BaseModel):
     return_processed_at: Optional[datetime] = None
     is_return_eligible: Optional[bool] = True
     product: Optional[Product] = None  # Include product details
+    variant: Optional["VariantResponse"] = None
 
     class Config:
         from_attributes = True
@@ -379,3 +408,53 @@ class ReturnListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+# Review Schemas
+class ReviewCreate(BaseModel):
+    rating: int  # 1-5
+    review_text: str | None = None
+
+class ReviewResponse(BaseModel):
+    id: int
+    product_id: int
+    user_id: int
+    rating: int
+    review_text: str | None = None
+    created_at: datetime
+    user_username: str | None = None
+
+    class Config:
+        from_attributes = True
+
+class ProductDetailResponse(Product):
+    """Extended product response with reviews"""
+    reviews: List[ReviewResponse] = []
+
+# Product Variant Schemas
+class VariantCreate(BaseModel):
+    size: str | None = None
+    color: str | None = None
+    image_url: str | None = None
+    price: float | None = None
+    stock: int = 0
+
+class VariantUpdate(BaseModel):
+    size: str | None = None
+    color: str | None = None
+    image_url: str | None = None
+    price: float | None = None
+    stock: int | None = None
+
+class VariantResponse(BaseModel):
+    id: int
+    product_id: int
+    size: str | None = None
+    color: str | None = None
+    image_url: str | None = None
+    price: float | None = None
+    stock: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

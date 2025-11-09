@@ -26,6 +26,11 @@ export default function SellerDashboard() {
     discounted_price: '',
     gender: '',
     category: '',
+    sizes: '',
+    colors: '',
+    size_fit: '',
+    material_care: '',
+    specifications: '',
   });
   const [bulkData, setBulkData] = useState('');
 
@@ -87,6 +92,11 @@ export default function SellerDashboard() {
         discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : null,
         gender: formData.gender || null,
         category: formData.category || null,
+        sizes: formData.sizes ? formData.sizes.split(',').map(s => s.trim()).filter(s => s) : null,
+        colors: formData.colors ? formData.colors.split(',').map(c => c.trim()).filter(c => c) : null,
+        size_fit: formData.size_fit || null,
+        material_care: formData.material_care || null,
+        specifications: formData.specifications ? JSON.parse(formData.specifications) : null,
       };
 
       if (editingProduct) {
@@ -160,6 +170,11 @@ export default function SellerDashboard() {
       discounted_price: product.discounted_price?.toString() || '',
       gender: product.gender || '',
       category: product.category || '',
+      sizes: Array.isArray(product.sizes) ? product.sizes.join(', ') : (product.sizes || ''),
+      colors: Array.isArray(product.colors) ? product.colors.join(', ') : (product.colors || ''),
+      size_fit: product.size_fit || '',
+      material_care: product.material_care || '',
+      specifications: product.specifications ? JSON.stringify(product.specifications, null, 2) : '',
     });
     setShowAddForm(true);
   };
@@ -173,6 +188,11 @@ export default function SellerDashboard() {
       discounted_price: '',
       gender: '',
       category: '',
+      sizes: '',
+      colors: '',
+      size_fit: '',
+      material_care: '',
+      specifications: '',
     });
   };
 
@@ -356,6 +376,68 @@ export default function SellerDashboard() {
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Sizes (comma-separated, e.g., S, M, L, XL)
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.sizes}
+                        onChange={(e) => setFormData({ ...formData, sizes: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        placeholder="S, M, L, XL, XXL"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Colors (comma-separated, e.g., Red, Blue, Black)
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.colors}
+                        onChange={(e) => setFormData({ ...formData, colors: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        placeholder="Red, Blue, Black"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Size & Fit
+                      </label>
+                      <textarea
+                        value={formData.size_fit}
+                        onChange={(e) => setFormData({ ...formData, size_fit: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        rows={3}
+                        placeholder="Size and fit information..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Material & Care
+                      </label>
+                      <textarea
+                        value={formData.material_care}
+                        onChange={(e) => setFormData({ ...formData, material_care: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        rows={3}
+                        placeholder="Material and care instructions..."
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Specifications (JSON format, e.g., {"{"}"Fabric": "Cotton", "Fit": "Regular"{"}"})
+                      </label>
+                      <textarea
+                        value={formData.specifications}
+                        onChange={(e) => setFormData({ ...formData, specifications: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900 font-mono text-sm"
+                        rows={4}
+                        placeholder='{"Fabric": "Cotton", "Fit": "Regular"}'
+                      />
+                    </div>
+                  </div>
                   <div className="flex gap-3">
                     <Button type="submit">
                       {editingProduct ? 'Update Product' : 'Create Product'}
