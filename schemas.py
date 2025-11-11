@@ -11,12 +11,28 @@ class ProductBase(BaseModel):
     discounted_price: float | None = None
     gender: Literal['men','women','unisex'] | None = None
     category: str | None = None
-    sizes: List[str] | None = None  # ["S", "M", "L", "XL", "XXL"]
-    colors: List[str] | None = None  # ["Red", "Blue", "Black"]
+    sizes: List[str] = []  # ["S", "M", "L", "XL", "XXL"] - default to empty list, validator converts None to []
+    colors: List[str] = []  # ["Red", "Blue", "Black"] - default to empty list, validator converts None to []
     variants: Dict[str, str] | None = None  # {"Red": "/images/red.jpg", "Blue": "/images/blue.jpg"}
     size_fit: str | None = None
     material_care: str | None = None
-    specifications: Dict[str, str] | None = None  # {"Fabric": "Cotton", "Fit": "Regular"}
+    specifications: Dict[str, Any] = {}  # {"Fabric": "Cotton", "Fit": "Regular"} - default to empty dict, validator converts None to {}
+    
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_collections(cls, data):
+        """Convert None to empty collections for sizes, colors, and specifications before validation"""
+        if isinstance(data, dict):
+            # Convert None to empty list for sizes
+            if 'sizes' in data and data['sizes'] is None:
+                data['sizes'] = []
+            # Convert None to empty list for colors
+            if 'colors' in data and data['colors'] is None:
+                data['colors'] = []
+            # Convert None to empty dict for specifications
+            if 'specifications' in data and data['specifications'] is None:
+                data['specifications'] = {}
+        return data
 
 class ProductCreate(ProductBase):
     pass
@@ -37,7 +53,7 @@ class Product(BaseModel):
     submitted_at: datetime | None = None
     sizes: List[str] | None = None
     colors: List[str] | None = None
-    variants: Dict[str, str] | None = None  # Legacy JSON field
+    legacy_variants: Dict[str, str] | None = None  # Legacy JSON field
     size_fit: str | None = None
     material_care: str | None = None
     specifications: Dict[str, str] | None = None
@@ -352,6 +368,43 @@ class ProductWithSellerInfo(Product):
 
     class Config:
         from_attributes = True
+
+# Admin Product Management Schemas
+class SellerInfo(BaseModel):
+    """Seller information for admin product view"""
+    id: int
+    username: str
+    email: str
+
+    class Config:
+        from_attributes = True
+
+class AdminProductResponse(BaseModel):
+    """Product response for admin with seller and variants"""
+    id: int
+    name: str
+    description: str | None = None
+    image_url: str | None = None
+    price: float
+    discounted_price: float | None = None
+    gender: Literal['men','women','unisex'] | None = None
+    category: str | None = None
+    verification_status: str | None = None
+    seller: SellerInfo | None = None
+    variants: List["VariantResponse"] = []
+
+    class Config:
+        from_attributes = True
+
+class ProductUpdate(BaseModel):
+    """Schema for updating product details (admin)"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    price: Optional[float] = None
+    discounted_price: Optional[float] = None
+    gender: Optional[Literal['men','women','unisex']] = None
+    category: Optional[str] = None
 
 class RejectProductRequest(BaseModel):
     notes: Optional[str] = None

@@ -1,6 +1,7 @@
 /**
  * Resolves product image URL to absolute URL
  * Handles relative paths, absolute URLs, /images paths (public folder), and /uploads paths
+ * Images are served by the backend from boltfrontend/public/images
  */
 export function resolveImageUrl(imageUrl, fallback = 'https://via.placeholder.com/400x533?text=Product') {
   if (!imageUrl) return fallback;
@@ -10,9 +11,9 @@ export function resolveImageUrl(imageUrl, fallback = 'https://via.placeholder.co
     return imageUrl;
   }
   
-  // If starts with /images, return as is (Vite serves public folder at root)
+  // If starts with /images, make it absolute (backend serves images)
   if (imageUrl.startsWith("/images")) {
-    return imageUrl;
+    return `http://127.0.0.1:8000${imageUrl}`;
   }
   
   // If starts with /uploads, make it absolute (backend served)
@@ -20,14 +21,15 @@ export function resolveImageUrl(imageUrl, fallback = 'https://via.placeholder.co
     return `http://127.0.0.1:8000${imageUrl}`;
   }
   
-  // Otherwise, assume it's a filename - try /images first (public folder), then /uploads (backend)
+  // Otherwise, assume it's a filename - point to backend's /images endpoint
   const cleanFilename = imageUrl.replace(/^\/+/, "");
   // Check if it looks like it's in the images folder
   if (cleanFilename.includes('/')) {
-    // Has path, return as is
-    return imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`;
+    // Has path, return as is but make absolute
+    const path = imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`;
+    return `http://127.0.0.1:8000${path.startsWith('/images') ? path : `/images${path}`}`;
   }
-  // Just a filename, assume it's in /images (public folder)
-  return `/images/${cleanFilename}`;
+  // Just a filename, assume it's in /images (backend serves from boltfrontend/public/images)
+  return `http://127.0.0.1:8000/images/${cleanFilename}`;
 }
 

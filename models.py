@@ -25,7 +25,7 @@ class Product(Base):
     # New product detail fields
     sizes = Column(Text, nullable=True)  # JSON array stored as TEXT: ["S", "M", "L", "XL"]
     colors = Column(Text, nullable=True)  # JSON array stored as TEXT: ["Red", "Blue", "Black"]
-    variants = Column(Text, nullable=True)  # JSON object: {"Red": "/images/red.jpg", "Blue": "/images/blue.jpg"}
+    legacy_variants = Column("variants", Text, nullable=True)  # JSON object: {"Red": "/images/red.jpg", "Blue": "/images/blue.jpg"} - maps to 'variants' column in DB
     size_fit = Column(Text, nullable=True)  # Size & Fit description
     material_care = Column(Text, nullable=True)  # Material & Care description
     specifications = Column(Text, nullable=True)  # JSON object: {"Fabric": "Cotton", "Fit": "Regular"}

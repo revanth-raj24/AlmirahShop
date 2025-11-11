@@ -12,6 +12,10 @@ export default function AdminProductVerification() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [processing, setProcessing] = useState(null);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [rejectNotes, setRejectNotes] = useState('');
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -40,6 +44,51 @@ export default function AdminProductVerification() {
 
   const handleViewDetails = (productId) => {
     navigate(`/admin/products/${productId}`);
+  };
+
+  const handleApprove = async (productId) => {
+    if (!confirm('Are you sure you want to approve this product? It will become visible to customers.')) {
+      return;
+    }
+
+    setProcessing(productId);
+    try {
+      await API.patch(`/admin/products/${productId}/approve`);
+      alert('Product approved successfully!');
+      fetchPendingProducts();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to approve product');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleRejectClick = (product) => {
+    setSelectedProduct(product);
+    setShowRejectModal(true);
+  };
+
+  const handleReject = async () => {
+    if (!rejectNotes.trim()) {
+      alert('Please provide a reason for rejection');
+      return;
+    }
+
+    if (!selectedProduct) return;
+
+    setProcessing(selectedProduct.id);
+    try {
+      await API.patch(`/admin/products/${selectedProduct.id}/reject`, { notes: rejectNotes });
+      alert('Product rejected successfully');
+      fetchPendingProducts();
+      setShowRejectModal(false);
+      setSelectedProduct(null);
+      setRejectNotes('');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to reject product');
+    } finally {
+      setProcessing(null);
+    }
   };
 
   if (loading) {
@@ -178,13 +227,34 @@ export default function AdminProductVerification() {
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <button
-                          onClick={() => handleViewDetails(product.id)}
-                          className="px-3 py-1 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded flex items-center gap-1 transition-colors"
-                        >
-                          <Eye className="w-4 h-4" />
-                          View
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleViewDetails(product.id)}
+                            className="px-3 py-1 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded flex items-center gap-1 transition-colors"
+                            title="View / Edit"
+                          >
+                            <Eye className="w-4 h-4" />
+                            View
+                          </button>
+                          <button
+                            onClick={() => handleApprove(product.id)}
+                            disabled={processing === product.id}
+                            className="px-3 py-1 text-sm bg-green-600 text-white hover:bg-green-700 disabled:bg-neutral-400 disabled:cursor-not-allowed rounded flex items-center gap-1 transition-colors"
+                            title="Approve"
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => handleRejectClick(product)}
+                            disabled={processing === product.id}
+                            className="px-3 py-1 text-sm bg-red-600 text-white hover:bg-red-700 disabled:bg-neutral-400 disabled:cursor-not-allowed rounded flex items-center gap-1 transition-colors"
+                            title="Reject"
+                          >
+                            <XCircle className="w-4 h-4" />
+                            Reject
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -200,6 +270,46 @@ export default function AdminProductVerification() {
           </div>
         )}
       </div>
+
+      {/* Reject Modal */}
+      {showRejectModal && selectedProduct && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="font-serif text-2xl text-neutral-900 mb-4">Reject Product</h3>
+            <p className="text-sm text-neutral-600 mb-2">
+              Product: <span className="font-medium">{selectedProduct.name}</span>
+            </p>
+            <p className="text-sm text-neutral-600 mb-4">
+              Please provide a reason for rejecting this product. This will be visible to the seller.
+            </p>
+            <textarea
+              value={rejectNotes}
+              onChange={(e) => setRejectNotes(e.target.value)}
+              placeholder="Enter rejection reason..."
+              className="w-full h-32 p-3 border border-neutral-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-neutral-900 mb-4"
+            />
+            <div className="flex gap-4">
+              <button
+                onClick={handleReject}
+                disabled={!rejectNotes.trim() || processing === selectedProduct.id}
+                className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 disabled:bg-neutral-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+              >
+                {processing === selectedProduct.id ? 'Processing...' : 'Confirm Reject'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setSelectedProduct(null);
+                  setRejectNotes('');
+                }}
+                className="px-6 py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-900 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

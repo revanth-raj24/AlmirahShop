@@ -32,6 +32,10 @@ export default function SellerDashboard() {
     material_care: '',
     specifications: '',
   });
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [imagePreviews, setImagePreviews] = useState([]);
+  const [existingImages, setExistingImages] = useState([]);
+  const [uploading, setUploading] = useState(false);
   const [bulkData, setBulkData] = useState('');
 
   useEffect(() => {
@@ -41,6 +45,17 @@ export default function SellerDashboard() {
     }
     fetchData();
   }, [user, activeTab, navigate]);
+
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      imagePreviews.forEach(preview => {
+        if (preview.preview && preview.isNew) {
+          URL.revokeObjectURL(preview.preview);
+        }
+      });
+    };
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
@@ -83,21 +98,133 @@ export default function SellerDashboard() {
     }
   };
 
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    
+    // Create previews for new files
+    const newPreviews = files.map(file => ({
+      file,
+      preview: URL.createObjectURL(file),
+      isNew: true
+    }));
+    
+    // Merge with existing images (if editing)
+    const existingPreviews = imagePreviews.filter(p => !p.isNew);
+    setImagePreviews([...existingPreviews, ...newPreviews]);
+    setSelectedFiles([...selectedFiles, ...files]);
+  };
+
+  const removeImagePreview = (index) => {
+    const previewToRemove = imagePreviews[index];
+    
+    // Clean up object URL if it's a new file
+    if (previewToRemove.isNew && previewToRemove.preview) {
+      URL.revokeObjectURL(previewToRemove.preview);
+    }
+    
+    // Remove from previews
+    const newPreviews = imagePreviews.filter((_, i) => i !== index);
+    setImagePreviews(newPreviews);
+    
+    // Update selected files (only new files)
+    setSelectedFiles(newPreviews.filter(p => p.isNew).map(p => p.file));
+    
+    // Update existing images (only existing images)
+    if (!previewToRemove.isNew && previewToRemove.url) {
+      // Find the original URL from existingImages
+      const updatedExisting = existingImages.filter(url => {
+        const resolved = resolveImageUrl(url);
+        return resolved !== previewToRemove.url;
+      });
+      setExistingImages(updatedExisting);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setUploading(true);
+    
     try {
+      let imageUrl = formData.image_url || null;
+      
+      // Upload new images if any
+      if (selectedFiles.length > 0) {
+        const formDataUpload = new FormData();
+        selectedFiles.forEach(file => {
+          formDataUpload.append('files', file);
+        });
+        
+        try {
+          const uploadResponse = await API.post('/seller/upload', formDataUpload, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          });
+          
+          if (uploadResponse.data.urls && uploadResponse.data.urls.length > 0) {
+            // Use the first uploaded image as the main image
+            imageUrl = uploadResponse.data.urls[0];
+          }
+        } catch (uploadErr) {
+          alert(uploadErr?.response?.data?.detail || 'Failed to upload images');
+          setUploading(false);
+          return;
+        }
+      } else if (editingProduct && existingImages.length > 0 && !imageUrl) {
+        // If editing and no new images, use existing image
+        imageUrl = existingImages[0];
+      }
+
+      // Parse sizes and colors - always return arrays (empty if no data)
+      const sizesArray = formData.sizes && formData.sizes.trim() 
+        ? formData.sizes.split(',').map(s => s.trim()).filter(s => s) 
+        : [];
+      const colorsArray = formData.colors && formData.colors.trim()
+        ? formData.colors.split(',').map(c => c.trim()).filter(c => c)
+        : [];
+      
+      // Parse specifications safely - always return an object (empty if no data)
+      let specificationsObj = {};
+      if (formData.specifications && formData.specifications.trim()) {
+        try {
+          const parsed = JSON.parse(formData.specifications);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            specificationsObj = parsed;
+          } else {
+            console.warn('Specifications must be a JSON object, not an array. Using empty object.');
+            specificationsObj = {};
+          }
+        } catch (e) {
+          alert('Invalid JSON format for specifications. Please check your JSON syntax.');
+          setUploading(false);
+          return;
+        }
+      }
+
+      // Build payload - ensure all list/dict fields are never null
       const payload = {
-        ...formData,
+        name: formData.name,
+        description: formData.description || null,
+        image_url: imageUrl,
         price: parseFloat(formData.price),
         discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : null,
         gender: formData.gender || null,
         category: formData.category || null,
-        sizes: formData.sizes ? formData.sizes.split(',').map(s => s.trim()).filter(s => s) : null,
-        colors: formData.colors ? formData.colors.split(',').map(c => c.trim()).filter(c => c) : null,
+        sizes: sizesArray, // Always send array (empty if no data)
+        colors: colorsArray, // Always send array (empty if no data)
         size_fit: formData.size_fit || null,
         material_care: formData.material_care || null,
-        specifications: formData.specifications ? JSON.parse(formData.specifications) : null,
+        specifications: specificationsObj, // Always send object (empty if no data)
       };
+
+      // Log payload for debugging
+      console.log('Submitting product with payload:', {
+        ...payload,
+        sizes: sizesArray,
+        colors: colorsArray,
+        specifications: specificationsObj
+      });
 
       if (editingProduct) {
         await API.patch(`/seller/products/update/${editingProduct.id}`, payload);
@@ -111,6 +238,8 @@ export default function SellerDashboard() {
       fetchData();
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to save product');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -176,6 +305,18 @@ export default function SellerDashboard() {
       material_care: product.material_care || '',
       specifications: product.specifications ? JSON.stringify(product.specifications, null, 2) : '',
     });
+    
+    // Set existing images for preview
+    if (product.image_url) {
+      const imageUrl = resolveImageUrl(product.image_url);
+      const existing = [{ url: imageUrl, isNew: false }];
+      setExistingImages([product.image_url]);
+      setImagePreviews(existing);
+    } else {
+      setExistingImages([]);
+      setImagePreviews([]);
+    }
+    setSelectedFiles([]);
     setShowAddForm(true);
   };
 
@@ -193,6 +334,15 @@ export default function SellerDashboard() {
       size_fit: '',
       material_care: '',
       specifications: '',
+    });
+    setSelectedFiles([]);
+    setImagePreviews([]);
+    setExistingImages([]);
+    // Clean up object URLs
+    imagePreviews.forEach(preview => {
+      if (preview.preview && preview.isNew) {
+        URL.revokeObjectURL(preview.preview);
+      }
     });
   };
 
@@ -365,11 +515,44 @@ export default function SellerDashboard() {
                       value={formData.category}
                       onChange={(e) => setFormData({ ...formData, category: e.target.value })}
                     />
-                    <Input
-                      label="Image URL"
-                      value={formData.image_url}
-                      onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Product Images (Select multiple images)
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleFileChange}
+                      className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
                     />
+                    {imagePreviews.length > 0 && (
+                      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {imagePreviews.map((preview, index) => (
+                          <div key={index} className="relative aspect-square bg-neutral-100 rounded overflow-hidden">
+                            <img
+                              src={preview.preview || preview.url}
+                              alt={`Preview ${index + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeImagePreview(index)}
+                              className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600 text-xs"
+                              title="Remove image"
+                            >
+                              ×
+                            </button>
+                            {index === 0 && (
+                              <div className="absolute bottom-2 left-2 bg-neutral-900 text-white text-xs px-2 py-1 rounded">
+                                Main Image
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <Input
                     label="Description"
@@ -439,12 +622,18 @@ export default function SellerDashboard() {
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <Button type="submit">
-                      {editingProduct ? 'Update Product' : 'Create Product'}
+                    <Button type="submit" disabled={uploading}>
+                      {uploading ? 'Uploading...' : (editingProduct ? 'Update Product' : 'Create Product')}
                     </Button>
                     <Button
                       type="button"
                       onClick={() => {
+                        // Clean up object URLs before resetting
+                        imagePreviews.forEach(preview => {
+                          if (preview.preview && preview.isNew) {
+                            URL.revokeObjectURL(preview.preview);
+                          }
+                        });
                         setShowAddForm(false);
                         setEditingProduct(null);
                         resetForm();

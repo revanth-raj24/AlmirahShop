@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { resolveImageUrl } from '../utils/imageUtils';
-import { CheckCircle, XCircle, ArrowLeft, User, Mail, Phone, Calendar, Package } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Edit, Trash2, X, Package, Upload, CheckCircle, XCircle } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function AdminProductDetail() {
@@ -13,9 +13,35 @@ export default function AdminProductDetail() {
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [editingVariant, setEditingVariant] = useState(null);
+  const [showVariantForm, setShowVariantForm] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectNotes, setRejectNotes] = useState('');
   const [processing, setProcessing] = useState(false);
+  
+  // Form state
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    image_url: '',
+    price: '',
+    discounted_price: '',
+    gender: '',
+    category: '',
+  });
+  
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [variantForm, setVariantForm] = useState({
+    size: '',
+    color: '',
+    image_url: '',
+    price: '',
+    stock: 0,
+  });
+  const [variantFile, setVariantFile] = useState(null);
+  const [variantImagePreview, setVariantImagePreview] = useState(null);
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -31,8 +57,20 @@ export default function AdminProductDetail() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await API.get(`/admin/products/${id}`);
+      const { data } = await API.get(`/admin/products/${id}/full`);
       setProduct(data);
+      setFormData({
+        name: data.name || '',
+        description: data.description || '',
+        image_url: data.image_url || '',
+        price: data.price?.toString() || '',
+        discounted_price: data.discounted_price?.toString() || '',
+        gender: data.gender || '',
+        category: data.category || '',
+      });
+      if (data.image_url) {
+        setImagePreview(resolveImageUrl(data.image_url));
+      }
     } catch (err) {
       console.error('Error fetching product details:', err);
       setError(err?.response?.data?.detail || 'Failed to fetch product details');
@@ -44,6 +82,198 @@ export default function AdminProductDetail() {
     }
   };
 
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setSelectedFile(file);
+    const preview = URL.createObjectURL(file);
+    setImagePreview(preview);
+  };
+
+  const handleVariantFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setVariantFile(file);
+    const preview = URL.createObjectURL(file);
+    setVariantImagePreview(preview);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      let imageUrl = formData.image_url;
+      
+      // Upload new image if selected
+      if (selectedFile) {
+        const formDataUpload = new FormData();
+        formDataUpload.append('files', selectedFile);
+        
+        try {
+          const uploadResponse = await API.post('/seller/upload', formDataUpload, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          
+          if (uploadResponse.data.urls && uploadResponse.data.urls.length > 0) {
+            imageUrl = uploadResponse.data.urls[0];
+          }
+        } catch (uploadErr) {
+          alert(uploadErr?.response?.data?.detail || 'Failed to upload image');
+          setSaving(false);
+          return;
+        }
+      }
+      
+      // Prepare update payload
+      const payload = {
+        name: formData.name || undefined,
+        description: formData.description || undefined,
+        image_url: imageUrl || undefined,
+        price: formData.price ? parseFloat(formData.price) : undefined,
+        discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : undefined,
+        gender: formData.gender || undefined,
+        category: formData.category || undefined,
+      };
+      
+      // Remove undefined values
+      Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);
+      
+      await API.patch(`/admin/products/${id}`, payload);
+      alert('Product updated successfully!');
+      fetchProductDetails();
+      setSelectedFile(null);
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to update product');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddVariant = async () => {
+    if (!variantForm.size && !variantForm.color) {
+      alert('Please provide at least size or color');
+      return;
+    }
+    
+    try {
+      let variantImageUrl = variantForm.image_url;
+      
+      // Upload variant image if selected
+      if (variantFile) {
+        const formDataUpload = new FormData();
+        formDataUpload.append('files', variantFile);
+        
+        try {
+          const uploadResponse = await API.post('/seller/upload', formDataUpload, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          
+          if (uploadResponse.data.urls && uploadResponse.data.urls.length > 0) {
+            variantImageUrl = uploadResponse.data.urls[0];
+          }
+        } catch (uploadErr) {
+          alert(uploadErr?.response?.data?.detail || 'Failed to upload variant image');
+          return;
+        }
+      }
+      
+      const payload = {
+        size: variantForm.size || null,
+        color: variantForm.color || null,
+        image_url: variantImageUrl || null,
+        price: variantForm.price ? parseFloat(variantForm.price) : null,
+        stock: parseInt(variantForm.stock) || 0,
+      };
+      
+      await API.post(`/admin/products/${id}/variant`, payload);
+      alert('Variant added successfully!');
+      fetchProductDetails();
+      setShowVariantForm(false);
+      setVariantForm({ size: '', color: '', image_url: '', price: '', stock: 0 });
+      setVariantFile(null);
+      setVariantImagePreview(null);
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to add variant');
+    }
+  };
+
+  const handleUpdateVariant = async (variantId) => {
+    try {
+      let variantImageUrl = editingVariant.image_url;
+      
+      // Upload variant image if selected
+      if (variantFile) {
+        const formDataUpload = new FormData();
+        formDataUpload.append('files', variantFile);
+        
+        try {
+          const uploadResponse = await API.post('/seller/upload', formDataUpload, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          
+          if (uploadResponse.data.urls && uploadResponse.data.urls.length > 0) {
+            variantImageUrl = uploadResponse.data.urls[0];
+          }
+        } catch (uploadErr) {
+          alert(uploadErr?.response?.data?.detail || 'Failed to upload variant image');
+          return;
+        }
+      }
+      
+      const payload = {
+        size: editingVariant.size || null,
+        color: editingVariant.color || null,
+        image_url: variantImageUrl || null,
+        price: editingVariant.price ? parseFloat(editingVariant.price) : null,
+        stock: parseInt(editingVariant.stock) || 0,
+      };
+      
+      await API.patch(`/admin/products/${id}/variant/${variantId}`, payload);
+      alert('Variant updated successfully!');
+      fetchProductDetails();
+      setEditingVariant(null);
+      setVariantFile(null);
+      setVariantImagePreview(null);
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to update variant');
+    }
+  };
+
+  const handleDeleteVariant = async (variantId) => {
+    if (!confirm('Are you sure you want to delete this variant?')) {
+      return;
+    }
+    
+    try {
+      await API.delete(`/admin/products/${id}/variant/${variantId}`);
+      alert('Variant deleted successfully!');
+      fetchProductDetails();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to delete variant');
+    }
+  };
+
+  const startEditVariant = (variant) => {
+    setEditingVariant({
+      ...variant,
+      price: variant.price?.toString() || '',
+      stock: variant.stock?.toString() || '0',
+    });
+    if (variant.image_url) {
+      setVariantImagePreview(resolveImageUrl(variant.image_url));
+    }
+    setShowVariantForm(true);
+  };
+
+  const cancelVariantEdit = () => {
+    setEditingVariant(null);
+    setShowVariantForm(false);
+    setVariantForm({ size: '', color: '', image_url: '', price: '', stock: 0 });
+    setVariantFile(null);
+    setVariantImagePreview(null);
+  };
+
   const handleApprove = async () => {
     if (!confirm('Are you sure you want to approve this product? It will become visible to customers.')) {
       return;
@@ -53,7 +283,7 @@ export default function AdminProductDetail() {
     try {
       await API.patch(`/admin/products/${id}/approve`);
       alert('Product approved successfully!');
-      navigate('/admin/products/pending');
+      fetchProductDetails();
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to approve product');
     } finally {
@@ -71,13 +301,13 @@ export default function AdminProductDetail() {
     try {
       await API.patch(`/admin/products/${id}/reject`, { notes: rejectNotes });
       alert('Product rejected successfully');
-      navigate('/admin/products/pending');
+      fetchProductDetails();
+      setShowRejectModal(false);
+      setRejectNotes('');
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to reject product');
     } finally {
       setProcessing(false);
-      setShowRejectModal(false);
-      setRejectNotes('');
     }
   };
 
@@ -99,8 +329,8 @@ export default function AdminProductDetail() {
           <Package className="w-16 h-16 mx-auto mb-4 text-red-500" />
           <h3 className="font-serif text-xl text-neutral-900 mb-2">Product Not Found</h3>
           <p className="text-neutral-600 mb-4">{error || 'The product you are looking for does not exist.'}</p>
-          <Button onClick={() => navigate('/admin/products/pending')}>
-            Back to Pending Products
+          <Button onClick={() => navigate('/admin/products')}>
+            Back to Products
           </Button>
         </div>
       </div>
@@ -113,23 +343,60 @@ export default function AdminProductDetail() {
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <button
-            onClick={() => navigate('/admin/products/pending')}
+            onClick={() => navigate('/admin/products')}
             className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Pending Products
+            Back to Products
           </button>
+          <div className="flex items-center gap-3">
+            {/* Approve/Reject Buttons */}
+            {product.verification_status !== 'Approved' && (
+              <>
+                <button
+                  onClick={handleApprove}
+                  disabled={processing}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-neutral-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                >
+                  <CheckCircle className="w-5 h-5" />
+                  Approve Product
+                </button>
+                <button
+                  onClick={() => setShowRejectModal(true)}
+                  disabled={processing || product.verification_status === 'Rejected'}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-neutral-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                >
+                  <XCircle className="w-5 h-5" />
+                  Reject Product
+                </button>
+              </>
+            )}
+            <Button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              <Save className="w-5 h-5" />
+              {saving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
         </div>
 
         <div className="bg-white border border-neutral-300 rounded-lg shadow-sm p-8">
+          {/* Product Information */}
+          <h2 className="font-serif text-2xl text-neutral-900 mb-6">Product Information</h2>
+          
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
             {/* Product Image */}
             <div>
-              <div className="aspect-[3/4] bg-neutral-100 rounded-lg overflow-hidden mb-4">
-                {product.image_url ? (
+              <label className="block text-sm font-medium text-neutral-700 mb-2">
+                Product Image
+              </label>
+              <div className="aspect-[3/4] bg-neutral-100 rounded-lg overflow-hidden mb-4 border-2 border-dashed border-neutral-300">
+                {imagePreview ? (
                   <img
-                    src={resolveImageUrl(product.image_url)}
-                    alt={product.name}
+                    src={imagePreview}
+                    alt="Product"
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -138,128 +405,319 @@ export default function AdminProductDetail() {
                   </div>
                 )}
               </div>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+              />
             </div>
 
-            {/* Product Details */}
-            <div>
-              <h1 className="font-serif text-3xl text-neutral-900 mb-4">{product.name}</h1>
-              
-              {product.description && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-medium text-neutral-600 mb-2">Description</h3>
-                  <p className="text-neutral-700 whitespace-pre-wrap">{product.description}</p>
+            {/* Product Details Form */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-neutral-700 mb-2">
+                  Product Name *
+                </label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-neutral-700 mb-2">
+                  Description
+                </label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  rows={4}
+                  className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Price *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.price}
+                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Discounted Price
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.discounted_price}
+                    onChange={(e) => setFormData({ ...formData, discounted_price: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Gender
+                  </label>
+                  <select
+                    value={formData.gender}
+                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                  >
+                    <option value="">Select Gender</option>
+                    <option value="men">Men</option>
+                    <option value="women">Women</option>
+                    <option value="unisex">Unisex</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Category
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.category}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-neutral-700 mb-2">
+                  Status
+                </label>
+                <span className={`px-3 py-1 text-sm rounded ${
+                  product.verification_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                  product.verification_status === 'Approved' ? 'bg-green-100 text-green-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {product.verification_status}
+                </span>
+              </div>
+
+              {product.seller && (
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Seller
+                  </label>
+                  <div className="text-sm text-neutral-600">
+                    <div className="font-medium">{product.seller.username}</div>
+                    <div className="text-xs">{product.seller.email}</div>
+                  </div>
                 </div>
               )}
-
-              <div className="space-y-4 mb-6">
-                <div>
-                  <span className="text-sm font-medium text-neutral-600">Price: </span>
-                  <span className="text-2xl font-bold text-neutral-900">
-                    ${product.price.toFixed(2)}
-                  </span>
-                  {product.discounted_price && (
-                    <span className="ml-2 text-lg text-neutral-500 line-through">
-                      ${product.discounted_price.toFixed(2)}
-                    </span>
-                  )}
-                </div>
-
-                {product.category && (
-                  <div>
-                    <span className="text-sm font-medium text-neutral-600">Category: </span>
-                    <span className="text-neutral-900">{product.category}</span>
-                  </div>
-                )}
-
-                {product.gender && (
-                  <div>
-                    <span className="text-sm font-medium text-neutral-600">Gender: </span>
-                    <span className="text-neutral-900 capitalize">{product.gender}</span>
-                  </div>
-                )}
-
-                <div>
-                  <span className="text-sm font-medium text-neutral-600">Status: </span>
-                  <span className={`px-2 py-1 text-xs rounded ${
-                    product.verification_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                    product.verification_status === 'Approved' ? 'bg-green-100 text-green-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {product.verification_status}
-                  </span>
-                </div>
-
-                {product.submitted_at && (
-                  <div className="flex items-center gap-2 text-sm text-neutral-600">
-                    <Calendar className="w-4 h-4" />
-                    <span>Submitted: {new Date(product.submitted_at).toLocaleString()}</span>
-                  </div>
-                )}
-
-                {product.verification_notes && (
-                  <div className="bg-red-50 border border-red-200 rounded p-4">
-                    <h4 className="text-sm font-medium text-red-900 mb-1">Rejection Notes</h4>
-                    <p className="text-sm text-red-700">{product.verification_notes}</p>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
 
-          {/* Seller Information */}
-          <div className="border-t border-neutral-300 pt-6 mb-8">
-            <h2 className="font-serif text-2xl text-neutral-900 mb-4">Seller Information</h2>
-            <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <div className="flex items-center gap-2 text-sm text-neutral-600 mb-1">
-                    <User className="w-4 h-4" />
-                    Username
+          {/* Variants Section */}
+          <div className="border-t border-neutral-300 pt-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-serif text-2xl text-neutral-900">Product Variants</h2>
+              {!showVariantForm && (
+                <button
+                  onClick={() => setShowVariantForm(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Variant
+                </button>
+              )}
+            </div>
+
+            {/* Variant Form */}
+            {showVariantForm && (
+              <div className="bg-neutral-50 border border-neutral-200 rounded-lg p-6 mb-6">
+                <h3 className="font-medium text-neutral-900 mb-4">
+                  {editingVariant ? 'Edit Variant' : 'Add New Variant'}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Size
+                    </label>
+                    <input
+                      type="text"
+                      value={editingVariant?.size || variantForm.size}
+                      onChange={(e) => editingVariant
+                        ? setEditingVariant({ ...editingVariant, size: e.target.value })
+                        : setVariantForm({ ...variantForm, size: e.target.value })
+                      }
+                      className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                      placeholder="e.g., S, M, L"
+                    />
                   </div>
-                  <div className="font-medium text-neutral-900">
-                    {product.seller_username || 'N/A'}
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Color
+                    </label>
+                    <input
+                      type="text"
+                      value={editingVariant?.color || variantForm.color}
+                      onChange={(e) => editingVariant
+                        ? setEditingVariant({ ...editingVariant, color: e.target.value })
+                        : setVariantForm({ ...variantForm, color: e.target.value })
+                      }
+                      className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                      placeholder="e.g., Red, Blue"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Variant Price (optional)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editingVariant?.price || variantForm.price}
+                      onChange={(e) => editingVariant
+                        ? setEditingVariant({ ...editingVariant, price: e.target.value })
+                        : setVariantForm({ ...variantForm, price: e.target.value })
+                      }
+                      className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                      placeholder="Leave empty to use product price"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Stock
+                    </label>
+                    <input
+                      type="number"
+                      value={editingVariant?.stock || variantForm.stock}
+                      onChange={(e) => editingVariant
+                        ? setEditingVariant({ ...editingVariant, stock: e.target.value })
+                        : setVariantForm({ ...variantForm, stock: e.target.value })
+                      }
+                      className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                      min="0"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">
+                      Variant Image
+                    </label>
+                    {variantImagePreview && (
+                      <div className="w-32 h-32 mb-2 rounded overflow-hidden border border-neutral-300">
+                        <img
+                          src={variantImagePreview}
+                          alt="Variant"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleVariantFileChange}
+                      className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                    />
                   </div>
                 </div>
-                <div>
-                  <div className="flex items-center gap-2 text-sm text-neutral-600 mb-1">
-                    <Mail className="w-4 h-4" />
-                    Email
-                  </div>
-                  <div className="font-medium text-neutral-900">
-                    {product.seller_email || 'N/A'}
-                  </div>
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 text-sm text-neutral-600 mb-1">
-                    <Phone className="w-4 h-4" />
-                    Phone
-                  </div>
-                  <div className="font-medium text-neutral-900">
-                    {product.seller_phone || 'N/A'}
-                  </div>
+                <div className="flex gap-4 mt-4">
+                  <button
+                    onClick={() => editingVariant
+                      ? handleUpdateVariant(editingVariant.id)
+                      : handleAddVariant()
+                    }
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    {editingVariant ? 'Update Variant' : 'Add Variant'}
+                  </button>
+                  <button
+                    onClick={cancelVariantEdit}
+                    className="px-4 py-2 bg-neutral-200 text-neutral-900 rounded-lg hover:bg-neutral-300 transition-colors"
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
-            </div>
-          </div>
+            )}
 
-          {/* Action Buttons */}
-          <div className="border-t border-neutral-300 pt-6 flex gap-4">
-            <Button
-              onClick={handleApprove}
-              disabled={processing || product.verification_status === 'Approved'}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white"
-            >
-              <CheckCircle className="w-5 h-5" />
-              Approve Product
-            </Button>
-            <button
-              onClick={() => setShowRejectModal(true)}
-              disabled={processing || product.verification_status === 'Rejected'}
-              className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:bg-neutral-400 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <XCircle className="w-5 h-5" />
-              Reject Product
-            </button>
+            {/* Variants Table */}
+            {product.variants && product.variants.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Image</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Size</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Color</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Price</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Stock</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-neutral-900">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200">
+                    {product.variants.map((variant) => (
+                      <tr key={variant.id} className="hover:bg-neutral-50">
+                        <td className="px-4 py-3">
+                          {variant.image_url ? (
+                            <img
+                              src={resolveImageUrl(variant.image_url)}
+                              alt="Variant"
+                              className="w-16 h-16 object-cover rounded"
+                            />
+                          ) : (
+                            <div className="w-16 h-16 bg-neutral-100 rounded flex items-center justify-center">
+                              <Package className="w-6 h-6 text-neutral-400" />
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-neutral-900">
+                          {variant.size || 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-neutral-900">
+                          {variant.color || 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-neutral-900">
+                          {variant.price ? `$${variant.price.toFixed(2)}` : `$${product.price.toFixed(2)}`}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-neutral-900">
+                          {variant.stock}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => startEditVariant(variant)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                              title="Edit"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteVariant(variant.id)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded transition-colors"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-neutral-500">
+                No variants added yet. Click "Add Variant" to create one.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -279,13 +737,13 @@ export default function AdminProductDetail() {
               className="w-full h-32 p-3 border border-neutral-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-neutral-900 mb-4"
             />
             <div className="flex gap-4">
-              <Button
+              <button
                 onClick={handleReject}
                 disabled={!rejectNotes.trim() || processing}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 disabled:bg-neutral-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
               >
-                Confirm Reject
-              </Button>
+                {processing ? 'Processing...' : 'Confirm Reject'}
+              </button>
               <button
                 onClick={() => {
                   setShowRejectModal(false);
@@ -302,4 +760,3 @@ export default function AdminProductDetail() {
     </div>
   );
 }
-

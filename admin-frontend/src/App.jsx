@@ -9,6 +9,8 @@ import UsersList from './pages/UsersList';
 import UserDetail from './pages/UserDetail';
 import AdminProductVerification from './pages/AdminProductVerification';
 import AdminProductDetail from './pages/AdminProductDetail';
+import AdminProducts from './pages/AdminProducts';
+import AdminSellers from './pages/AdminSellers';
 import AdminReturns from './pages/AdminReturns';
 import AdminReturnDetail from './pages/AdminReturnDetail';
 
@@ -71,10 +73,26 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/admin/products"
+        element={
+          <ProtectedRoute>
+            <AdminProducts />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/admin/products/:id"
         element={
           <ProtectedRoute>
             <AdminProductDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/sellers"
+        element={
+          <ProtectedRoute>
+            <AdminSellers />
           </ProtectedRoute>
         }
       />
