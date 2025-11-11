@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -6,15 +6,17 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
-from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address
-from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse
+from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, validate_username, validate_password_strength
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import text, desc, or_
+from sqlalchemy import text, desc, or_, func
 import logging
 import os
+import json
+import uuid
 from email_utils import generate_otp, send_otp_email, send_password_reset_email, send_password_reset_success_email
 from password_service import create_reset_token, validate_reset_token, invalidate_reset_token, check_rate_limit
 
@@ -145,9 +147,167 @@ def migrate_return_fields():
         logger.exception(f"Return fields migration error: {e}")
         # Don't fail startup if migration fails - columns might already exist
 
+# Safe migration: Add product detail fields if they don't exist
+def migrate_product_detail_fields():
+    """Safely add new product detail columns if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("PRAGMA table_info(products)"))
+            columns = [row[1] for row in result]
+            
+            if "sizes" not in columns:
+                logger.info("Adding sizes column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN sizes TEXT"))
+            
+            if "colors" not in columns:
+                logger.info("Adding colors column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN colors TEXT"))
+            
+            if "variants" not in columns:
+                logger.info("Adding variants column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN variants TEXT"))
+            
+            if "size_fit" not in columns:
+                logger.info("Adding size_fit column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN size_fit TEXT"))
+            
+            if "material_care" not in columns:
+                logger.info("Adding material_care column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN material_care TEXT"))
+            
+            if "specifications" not in columns:
+                logger.info("Adding specifications column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN specifications TEXT"))
+            
+            logger.info("Product detail fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Product detail fields migration error: {e}")
+
+# Safe migration: Add size and color to cart_items if they don't exist
+def migrate_cart_item_fields():
+    """Safely add size and color columns to cart_items table if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("PRAGMA table_info(cart_items)"))
+            columns = [row[1] for row in result]
+            
+            if "size" not in columns:
+                logger.info("Adding size column to cart_items table")
+                conn.execute(text("ALTER TABLE cart_items ADD COLUMN size TEXT"))
+            
+            if "color" not in columns:
+                logger.info("Adding color column to cart_items table")
+                conn.execute(text("ALTER TABLE cart_items ADD COLUMN color TEXT"))
+            
+            logger.info("Cart item fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Cart item fields migration error: {e}")
+
+# Safe migration: Create reviews table if it doesn't exist
+def migrate_reviews_table():
+    """Safely create reviews table if it doesn't exist"""
+    try:
+        with engine.begin() as conn:
+            # Check if reviews table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='reviews'"))
+            if not result.fetchone():
+                logger.info("Creating reviews table")
+                # Create reviews table
+                conn.execute(text("""
+                    CREATE TABLE reviews (
+                        id INTEGER PRIMARY KEY,
+                        product_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        rating INTEGER NOT NULL,
+                        review_text TEXT,
+                        created_at DATETIME,
+                        FOREIGN KEY(product_id) REFERENCES products(id),
+                        FOREIGN KEY(user_id) REFERENCES users(id)
+                    )
+                """))
+                # Create indexes
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_reviews_product_id ON reviews(product_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_reviews_user_id ON reviews(user_id)"))
+                logger.info("Reviews table created successfully")
+    except Exception as e:
+        logger.exception(f"Reviews table migration error: {e}")
+
+# Safe migration: Create product_variants table if it doesn't exist
+def migrate_product_variants_table():
+    """Safely create product_variants table if it doesn't exist"""
+    try:
+        with engine.begin() as conn:
+            # Check if product_variants table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='product_variants'"))
+            if not result.fetchone():
+                logger.info("Creating product_variants table")
+                conn.execute(text("""
+                    CREATE TABLE product_variants (
+                        id INTEGER PRIMARY KEY,
+                        product_id INTEGER NOT NULL,
+                        size TEXT,
+                        color TEXT,
+                        image_url TEXT,
+                        price REAL,
+                        stock INTEGER DEFAULT 0,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        FOREIGN KEY(product_id) REFERENCES products(id)
+                    )
+                """))
+                # Create indexes
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_variants_product_id ON product_variants(product_id)"))
+                logger.info("Product variants table created successfully")
+    except Exception as e:
+        logger.exception(f"Product variants table migration error: {e}")
+
+# Safe migration: Add variant_id to cart_items and order_items
+def migrate_variant_id_fields():
+    """Safely add variant_id columns to cart_items and order_items if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            # Check cart_items columns
+            result = conn.execute(text("PRAGMA table_info(cart_items)"))
+            cart_columns = [row[1] for row in result]
+            
+            if "variant_id" not in cart_columns:
+                logger.info("Adding variant_id column to cart_items table")
+                conn.execute(text("ALTER TABLE cart_items ADD COLUMN variant_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cart_items_variant_id ON cart_items(variant_id)"))
+            
+            # Check order_items columns
+            result = conn.execute(text("PRAGMA table_info(order_items)"))
+            order_columns = [row[1] for row in result]
+            
+            if "variant_id" not in order_columns:
+                logger.info("Adding variant_id column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN variant_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_order_items_variant_id ON order_items(variant_id)"))
+            
+            if "variant_size" not in order_columns:
+                logger.info("Adding variant_size column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN variant_size TEXT"))
+            
+            if "variant_color" not in order_columns:
+                logger.info("Adding variant_color column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN variant_color TEXT"))
+            
+            if "variant_image_url" not in order_columns:
+                logger.info("Adding variant_image_url column to order_items table")
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN variant_image_url TEXT"))
+            
+            logger.info("Variant ID fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Variant ID fields migration error: {e}")
+
 # Run migrations on startup
 migrate_verification_fields()
 migrate_return_fields()
+migrate_product_detail_fields()
+migrate_cart_item_fields()
+migrate_reviews_table()
+migrate_product_variants_table()
+migrate_variant_id_fields()
 
 # Static file serving for uploads
 UPLOADS_DIR = "uploads"
@@ -498,10 +658,22 @@ async def options_handler(request: Request, full_path: str):
 # Create Product
 @app.post("/products", response_model=ProductSchema, tags=["Products"])
 def create_product(product: ProductCreate, db: Session = Depends(get_db)):
-    new_product = ProductModel(**product.model_dump())
+    product_data = product.model_dump()
+    # Serialize JSON fields
+    if 'sizes' in product_data and product_data['sizes']:
+        product_data['sizes'] = serialize_json_field(product_data['sizes'])
+    if 'colors' in product_data and product_data['colors']:
+        product_data['colors'] = serialize_json_field(product_data['colors'])
+    if 'variants' in product_data and product_data['variants']:
+        product_data['variants'] = serialize_json_field(product_data['variants'])
+    if 'specifications' in product_data and product_data['specifications']:
+        product_data['specifications'] = serialize_json_field(product_data['specifications'])
+    
+    new_product = ProductModel(**product_data)
     db.add(new_product)
     db.commit()
     db.refresh(new_product)
+    normalize_product_gender(new_product, db)
     return new_product
 
 # Get All Products
@@ -516,29 +688,137 @@ def get_products(
         query = query.filter(ProductModel.verification_status == "Approved")
         # Only filter by gender if explicitly provided and valid
         if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
-            # Case-insensitive filter
-            query = query.filter(
-                (ProductModel.gender == gender.lower()) | 
-                (ProductModel.gender == gender.upper()) |
-                (ProductModel.gender == gender.capitalize())
-            )
+            gender_lower = gender.lower()
+            # Include unisex products when filtering by men or women
+            if gender_lower == 'men':
+                # Show men products AND unisex products (case-insensitive)
+                query = query.filter(
+                    (func.lower(ProductModel.gender) == 'men') |
+                    (func.lower(ProductModel.gender) == 'unisex')
+                )
+            elif gender_lower == 'women':
+                # Show women products AND unisex products (case-insensitive)
+                query = query.filter(
+                    (func.lower(ProductModel.gender) == 'women') |
+                    (func.lower(ProductModel.gender) == 'unisex')
+                )
+            else:  # unisex
+                # Show only unisex products (case-insensitive)
+                query = query.filter(func.lower(ProductModel.gender) == 'unisex')
         # When no gender filter, show ALL verified products
         items = query.order_by(ProductModel.id.desc()).all()
-        # Normalize gender values to lowercase for Pydantic validation
-        items = [normalize_product_gender(item) for item in items]
-        return items
-    except Exception:
-        logger.exception("Failed to fetch products")
-        raise HTTPException(status_code=500, detail="Failed to fetch products")
+        # Normalize gender values to lowercase for Pydantic validation (load variants if needed)
+        normalized_items = []
+        for item in items:
+            try:
+                normalized = normalize_product_gender(item, db)
+                normalized_items.append(normalized)
+            except Exception as e:
+                logger.error(f"Error normalizing product {item.id}: {e}")
+                logger.exception(f"Full traceback for product {item.id}")
+                # Skip this product but continue with others
+                continue
+        return normalized_items
+    except Exception as e:
+        logger.exception(f"Failed to fetch products: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch products: {str(e)}")
 
-def normalize_product_gender(product):
+def serialize_json_field(value):
+    """Serialize Python object to JSON string for database storage"""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value  # Already a string
+    return json.dumps(value)
+
+def deserialize_json_field(value):
+    """Deserialize JSON string from database to Python object"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            # Return the parsed value (could be list, dict, or other JSON types)
+            return parsed
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Failed to deserialize JSON field: {value}, error: {e}")
+            return None  # Return None instead of the raw string for invalid JSON
+    # If already a Python object (list, dict, etc.), return as-is
+    return value
+
+def normalize_product_gender(product, db: Session = None):
     """Normalize product gender to lowercase for Pydantic validation"""
-    if hasattr(product, 'gender') and product.gender:
-        product.gender = product.gender.lower() if product.gender.lower() in ['men', 'women', 'unisex'] else None
-    # Also normalize image URL
-    if hasattr(product, 'image_url') and product.image_url:
-        product.image_url = normalize_image_url(product.image_url)
-    return product
+    try:
+        # Normalize gender
+        if hasattr(product, 'gender') and product.gender:
+            product.gender = product.gender.lower() if product.gender.lower() in ['men', 'women', 'unisex'] else None
+
+        # Normalize image URL
+        if hasattr(product, 'image_url') and product.image_url:
+            product.image_url = normalize_image_url(product.image_url)
+
+        # Normalize sizes (JSON column) - keep empty lists as empty lists, not None
+        if hasattr(product, 'sizes'):
+            if product.sizes:
+                sizes_list = deserialize_json_field(product.sizes)
+                # Keep empty lists as empty lists for schema compatibility
+                product.sizes = sizes_list if isinstance(sizes_list, list) else None
+            else:
+                product.sizes = None
+
+        # Normalize colors (JSON column) - keep empty lists as empty lists, not None
+        if hasattr(product, 'colors'):
+            if product.colors:
+                colors_list = deserialize_json_field(product.colors)
+                # Keep empty lists as empty lists for schema compatibility
+                product.colors = colors_list if isinstance(colors_list, list) else None
+            else:
+                product.colors = None
+
+        # Normalize legacy_variants (JSON column) - keep empty dicts as empty dicts, not None
+        # Note: The column is named 'legacy_variants' in the model to avoid conflict with 'variants' relationship
+        if hasattr(product, 'legacy_variants'):
+            try:
+                raw = getattr(product, 'legacy_variants', None)
+                if raw:
+                    parsed = deserialize_json_field(raw)
+                    # Keep empty dicts as empty dicts for schema compatibility
+                    setattr(product, 'legacy_variants', parsed if isinstance(parsed, dict) else None)
+                else:
+                    setattr(product, 'legacy_variants', None)
+            except Exception as e:
+                logger.warning(f"Error normalizing legacy_variants for product {getattr(product, 'id', 'unknown')}: {e}")
+                setattr(product, 'legacy_variants', None)
+
+        # Normalize specifications (JSON column) - keep empty dicts as empty dicts, not None
+        if hasattr(product, 'specifications'):
+            if product.specifications:
+                specs_dict = deserialize_json_field(product.specifications)
+                # Keep empty dicts as empty dicts for schema compatibility
+                product.specifications = specs_dict if isinstance(specs_dict, dict) else None
+            else:
+                product.specifications = None
+
+        # Load product variants (actual relationship)
+        if db and hasattr(product, 'id'):
+            variants = db.query(ProductVariant).filter(
+                ProductVariant.product_id == product.id
+            ).all()
+
+            for variant in variants:
+                if variant.image_url:
+                    variant.image_url = normalize_image_url(variant.image_url)
+
+            product.product_variants = variants
+
+        return product
+    except Exception as e:
+        product_id = getattr(product, 'id', 'unknown')
+        logger.error(f"Error in normalize_product_gender for product {product_id}: {e}")
+        logger.exception(f"Full traceback for product {product_id}")
+        # Return product as-is if normalization fails (better than crashing)
+        return product
+
 
 @app.get("/products/paginated", response_model=ProductListResponse, tags=["Products"])
 def get_products_paginated(
@@ -553,19 +833,30 @@ def get_products_paginated(
         base = base.filter(ProductModel.verification_status == "Approved")
         # Only filter by gender if explicitly provided and not empty
         if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
-            # Case-insensitive filter: check both uppercase and lowercase
-            base = base.filter(
-                (ProductModel.gender == gender.lower()) | 
-                (ProductModel.gender == gender.upper()) |
-                (ProductModel.gender == gender.capitalize())
-            )
+            gender_lower = gender.lower()
+            # Include unisex products when filtering by men or women
+            if gender_lower == 'men':
+                # Show men products AND unisex products (case-insensitive)
+                base = base.filter(
+                    (func.lower(ProductModel.gender) == 'men') |
+                    (func.lower(ProductModel.gender) == 'unisex')
+                )
+            elif gender_lower == 'women':
+                # Show women products AND unisex products (case-insensitive)
+                base = base.filter(
+                    (func.lower(ProductModel.gender) == 'women') |
+                    (func.lower(ProductModel.gender) == 'unisex')
+                )
+            else:  # unisex
+                # Show only unisex products (case-insensitive)
+                base = base.filter(func.lower(ProductModel.gender) == 'unisex')
         # When no gender filter, show ALL verified products regardless of gender value
         total = base.count()
         logger.info(f"Fetching products: page={page}, page_size={page_size}, gender={gender}, total={total}")
         offset = (page - 1) * page_size
         items = base.order_by(ProductModel.id.desc()).limit(page_size).offset(offset).all()
-        # Normalize gender values to lowercase for Pydantic validation
-        items = [normalize_product_gender(item) for item in items]
+        # Normalize gender values to lowercase for Pydantic validation (load variants if needed)
+        items = [normalize_product_gender(item, db) for item in items]
         logger.info(f"Returning {len(items)} products")
         return {"items": items, "total": total, "page": page, "page_size": page_size}
     except Exception as e:
@@ -592,16 +883,29 @@ def search_products(
         query = query.filter(ProductModel.price <= max_price)
     # Only filter by gender if explicitly provided and valid
     if gender and isinstance(gender, str) and gender.strip() and gender.lower() in ['men', 'women', 'unisex']:
-        # Case-insensitive filter
-        query = query.filter(
-            (ProductModel.gender == gender.lower()) | 
-            (ProductModel.gender == gender.upper()) |
-            (ProductModel.gender == gender.capitalize())
-        )
+        gender_lower = gender.lower()
+        # Include unisex products when filtering by men or women
+        if gender_lower == 'men':
+            # Show men products AND unisex products
+            query = query.filter(
+                (ProductModel.gender.in_(['men', 'Men', 'MEN'])) |
+                (ProductModel.gender.in_(['unisex', 'Unisex', 'UNISEX']))
+            )
+        elif gender_lower == 'women':
+            # Show women products AND unisex products
+            query = query.filter(
+                (ProductModel.gender.in_(['women', 'Women', 'WOMEN'])) |
+                (ProductModel.gender.in_(['unisex', 'Unisex', 'UNISEX']))
+            )
+        else:  # unisex
+            # Show only unisex products
+            query = query.filter(
+                ProductModel.gender.in_(['unisex', 'Unisex', 'UNISEX'])
+            )
 
     results = query.order_by(ProductModel.id.desc()).all()
-    # Normalize gender values to lowercase for Pydantic validation
-    results = [normalize_product_gender(item) for item in results]
+    # Normalize gender values to lowercase for Pydantic validation (load variants if needed)
+    results = [normalize_product_gender(item, db) for item in results]
     return results
 
 @app.get("/products/{product_id}", response_model=ProductSchema, tags=["Products"])
@@ -612,9 +916,144 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
     ).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    # Normalize gender value to lowercase for Pydantic validation
-    normalize_product_gender(product)
+    
+    # Calculate average rating and total reviews
+    reviews_query = db.query(Review).filter(Review.product_id == product_id)
+    total_reviews = reviews_query.count()
+    if total_reviews > 0:
+        avg_rating = db.query(func.avg(Review.rating)).filter(Review.product_id == product_id).scalar()
+        product.average_rating = round(float(avg_rating), 2) if avg_rating else None
+    else:
+        product.average_rating = None
+    product.total_reviews = total_reviews
+    
+    # Normalize gender value to lowercase for Pydantic validation (this will also load variants)
+    normalize_product_gender(product, db)
     return product
+
+# Get Product Reviews
+@app.get("/products/{product_id}/reviews", response_model=list[ReviewResponse], tags=["Products"])
+def get_product_reviews(product_id: int, db: Session = Depends(get_db)):
+    """Get all reviews for a product"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    reviews = db.query(Review).filter(Review.product_id == product_id).order_by(Review.created_at.desc()).all()
+    result = []
+    for review in reviews:
+        user = db.query(User).filter(User.id == review.user_id).first()
+        review_dict = {
+            "id": review.id,
+            "product_id": review.product_id,
+            "user_id": review.user_id,
+            "rating": review.rating,
+            "review_text": review.review_text,
+            "created_at": review.created_at,
+            "user_username": user.username if user else None
+        }
+        result.append(review_dict)
+    return result
+
+# Create Product Review
+@app.post("/products/{product_id}/reviews", response_model=ReviewResponse, tags=["Products"])
+def create_product_review(
+    product_id: int,
+    review: ReviewCreate,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Create a review for a product (authenticated users only)"""
+    # Validate rating
+    if review.rating < 1 or review.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    
+    # Check if product exists
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Find user
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if user already reviewed this product
+    existing_review = db.query(Review).filter(
+        Review.product_id == product_id,
+        Review.user_id == user.id
+    ).first()
+    if existing_review:
+        raise HTTPException(status_code=400, detail="You have already reviewed this product")
+    
+    # Create review
+    new_review = Review(
+        product_id=product_id,
+        user_id=user.id,
+        rating=review.rating,
+        review_text=review.review_text
+    )
+    db.add(new_review)
+    db.commit()
+    db.refresh(new_review)
+    
+    return {
+        "id": new_review.id,
+        "product_id": new_review.product_id,
+        "user_id": new_review.user_id,
+        "rating": new_review.rating,
+        "review_text": new_review.review_text,
+        "created_at": new_review.created_at,
+        "user_username": user.username
+    }
+
+# Get Similar Products
+@app.get("/products/{product_id}/similar", response_model=list[ProductSchema], tags=["Products"])
+def get_similar_products(product_id: int, limit: int = Query(12, ge=1, le=20), db: Session = Depends(get_db)):
+    """Get similar products based on category, gender, or price range"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Build query for similar products
+    query = db.query(ProductModel).filter(
+        ProductModel.id != product_id,
+        ProductModel.verification_status == "Approved"
+    )
+    
+    similar_products = []
+    
+    # Priority 1: Same category
+    if product.category:
+        category_products = query.filter(ProductModel.category == product.category).limit(limit).all()
+        similar_products.extend(category_products)
+    
+    # Priority 2: Same gender (if we need more)
+    if len(similar_products) < limit and product.gender:
+        existing_ids = [p.id for p in similar_products]
+        gender_query = query.filter(ProductModel.gender == product.gender)
+        if existing_ids:
+            gender_query = gender_query.filter(~ProductModel.id.in_(existing_ids))
+        gender_products = gender_query.limit(limit - len(similar_products)).all()
+        similar_products.extend(gender_products)
+    
+    # Priority 3: Price range ±20% (if we still need more)
+    if len(similar_products) < limit:
+        price_min = product.price * 0.8
+        price_max = product.price * 1.2
+        existing_ids = [p.id for p in similar_products]
+        price_query = query.filter(
+            ProductModel.price >= price_min,
+            ProductModel.price <= price_max
+        )
+        if existing_ids:
+            price_query = price_query.filter(~ProductModel.id.in_(existing_ids))
+        price_products = price_query.limit(limit - len(similar_products)).all()
+        similar_products.extend(price_products)
+    
+    # Normalize products (load variants if needed)
+    similar_products = [normalize_product_gender(p, db) for p in similar_products[:limit]]
+    return similar_products
 
 # Delete Product
 @app.delete("/products/{product_id}", tags=["Products"])
@@ -965,21 +1404,83 @@ def add_to_cart(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Check if product already in cart
-    cart_item = (
-        db.query(CartItem)
-        .filter(CartItem.user_id == user.id, CartItem.product_id == item.product_id)
-        .first()
-    )
+    # Check if product has variants
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == item.product_id).all()
+    has_variants = len(variants) > 0
+
+    # If product has variants, variant_id is required
+    if has_variants:
+        if not item.variant_id:
+            raise HTTPException(status_code=400, detail="variant_id is required for products with variants")
+        
+        # Validate variant exists and belongs to product
+        variant = db.query(ProductVariant).filter(
+            ProductVariant.id == item.variant_id,
+            ProductVariant.product_id == item.product_id
+        ).first()
+        if not variant:
+            raise HTTPException(status_code=404, detail="Variant not found or does not belong to this product")
+        
+        # Use variant price if available, otherwise product price
+        item_price = variant.price if variant.price else product.price
+    else:
+        # Legacy: Validate size/color if product has sizes/colors (old system)
+        if product.sizes:
+            sizes_list = deserialize_json_field(product.sizes)
+            if item.size and sizes_list and item.size not in sizes_list:
+                raise HTTPException(status_code=400, detail=f"Invalid size. Available sizes: {', '.join(sizes_list)}")
+            if not item.size and sizes_list:
+                raise HTTPException(status_code=400, detail="Size is required for this product")
+
+        if product.colors:
+            colors_list = deserialize_json_field(product.colors)
+            if item.color and colors_list and item.color not in colors_list:
+                raise HTTPException(status_code=400, detail=f"Invalid color. Available colors: {', '.join(colors_list)}")
+        
+        item_price = product.price
+
+    # Check if product with same variant already in cart
+    if has_variants:
+        cart_item = (
+            db.query(CartItem)
+            .filter(
+                CartItem.user_id == user.id,
+                CartItem.product_id == item.product_id,
+                CartItem.variant_id == item.variant_id
+            )
+            .first()
+        )
+    else:
+        # Legacy: check by size/color
+        cart_item = (
+            db.query(CartItem)
+            .filter(
+                CartItem.user_id == user.id,
+                CartItem.product_id == item.product_id,
+                CartItem.size == item.size,
+                CartItem.color == item.color
+            )
+            .first()
+        )
 
     if cart_item:
         cart_item.quantity += item.quantity
     else:
-        cart_item = CartItem(user_id=user.id, product_id=item.product_id, quantity=item.quantity)
+        cart_item = CartItem(
+            user_id=user.id,
+            product_id=item.product_id,
+            variant_id=item.variant_id if has_variants else None,
+            quantity=item.quantity,
+            size=item.size if not has_variants else None,
+            color=item.color if not has_variants else None
+        )
         db.add(cart_item)
 
     db.commit()
     db.refresh(cart_item)
+    # Load variant for response
+    if cart_item.variant_id:
+        cart_item.variant = db.query(ProductVariant).filter(ProductVariant.id == cart_item.variant_id).first()
     return cart_item
 
 
@@ -988,8 +1489,16 @@ def get_cart(
     db: Session = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
+    """Get user's cart with variant information"""
     user = db.query(User).filter(User.username == current_user).first()
-    return db.query(CartItem).filter(CartItem.user_id == user.id).all()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    cart_items = db.query(CartItem).filter(CartItem.user_id == user.id).all()
+    # Load variants for each cart item
+    for item in cart_items:
+        if item.variant_id:
+            item.variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+    return cart_items
 
 
 @app.delete("/cart/remove/{product_id}", tags=["Cart"])
@@ -1193,14 +1702,33 @@ def create_order(
             # optional: skip or abort; here we abort to keep consistency
             raise HTTPException(status_code=404, detail=f"Product id {ci.product_id} not found")
 
-        item_price = float(product.price) * int(ci.quantity)
+        # Get variant if exists
+        variant = None
+        variant_price = product.price
+        variant_size = None
+        variant_color = None
+        variant_image_url = None
+        
+        if ci.variant_id:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == ci.variant_id).first()
+            if variant:
+                variant_price = variant.price if variant.price else product.price
+                variant_size = variant.size
+                variant_color = variant.color
+                variant_image_url = variant.image_url
+
+        item_price = float(variant_price) * int(ci.quantity)
         total += item_price
 
         order_item = OrderItem(
             order_id=order.id,
             product_id=product.id,
+            variant_id=ci.variant_id,
             quantity=ci.quantity,
-            price=product.price,  # price per item (store per-item price)
+            price=variant_price,  # price per item (use variant price if available)
+            variant_size=variant_size,  # Snapshot variant info
+            variant_color=variant_color,
+            variant_image_url=variant_image_url,
             seller_id=product.seller_id,  # Copy seller_id from product
             status="Pending"  # Initial status
         )
@@ -1212,6 +1740,18 @@ def create_order(
     db.query(CartItem).filter(CartItem.user_id == user.id).delete()
     db.commit()
     db.refresh(order)
+    
+    # Load order items with product details and normalize products
+    order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+    for item in order_items:
+        item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if item.product:
+            normalize_product_gender(item.product, db)
+        # Load variant if exists
+        if item.variant_id:
+            item.variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+    order.order_items = order_items
+    
     return order
 
 
@@ -1228,7 +1768,10 @@ def list_orders(db: Session = Depends(get_db), current_user: str = Depends(get_c
         for item in order_items:
             item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
             if item.product:
-                normalize_product_gender(item.product)
+                normalize_product_gender(item.product, db)
+            # Load variant if exists
+            if item.variant_id:
+                item.variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
             # Add seller info to product if seller_id exists
             if item.seller_id:
                 seller = db.query(User).filter(User.id == item.seller_id).first()
@@ -1256,7 +1799,10 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = 
     for item in order_items:
         item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
         if item.product:
-            normalize_product_gender(item.product)
+            normalize_product_gender(item.product, db)
+        # Load variant if exists
+        if item.variant_id:
+            item.variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
         # Add seller info to product if seller_id exists
         if item.seller_id:
             seller = db.query(User).filter(User.id == item.seller_id).first()
@@ -1321,7 +1867,7 @@ def request_return(
     # Load product for response
     order_item.product = db.query(ProductModel).filter(ProductModel.id == order_item.product_id).first()
     if order_item.product:
-        normalize_product_gender(order_item.product)
+        normalize_product_gender(order_item.product, db)
     
     return order_item
 
@@ -1360,7 +1906,7 @@ def cancel_return(
     # Load product for response
     order_item.product = db.query(ProductModel).filter(ProductModel.id == order_item.product_id).first()
     if order_item.product:
-        normalize_product_gender(order_item.product)
+        normalize_product_gender(order_item.product, db)
     
     return order_item
 
@@ -1388,7 +1934,7 @@ def list_my_returns(
         # Load product
         item.product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
         if item.product:
-            normalize_product_gender(item.product)
+            normalize_product_gender(item.product, db)
         
         # Load order info
         order = db.query(Order).filter(Order.id == item.order_id).first()
@@ -1614,6 +2160,48 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
 
 # ==================== SELLER ROUTES ====================
 
+@app.post("/seller/upload", tags=["Seller"])
+async def upload_images(
+    files: list[UploadFile] = File(...),
+    current_seller: User = Depends(seller_only)
+):
+    """Upload one or more product images (seller only)"""
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
+    if len(files) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 images allowed per upload")
+    
+    uploaded_urls = []
+    
+    for file in files:
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail=f"File {file.filename} is not an image")
+        
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else '.jpg'
+        unique_filename = f"{uuid.uuid4().hex}{file_extension}"
+        file_path = os.path.join(UPLOADS_DIR, unique_filename)
+        
+        # Save file
+        try:
+            with open(file_path, "wb") as buffer:
+                content = await file.read()
+                buffer.write(content)
+            
+            # Return the URL path
+            file_url = f"/uploads/{unique_filename}"
+            uploaded_urls.append(file_url)
+        except Exception as e:
+            logger.exception(f"Error saving file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to save file {file.filename}")
+    
+    return {
+        "urls": uploaded_urls,
+        "count": len(uploaded_urls)
+    }
+
 @app.get("/seller/products", response_model=list[ProductSchema], tags=["Seller"])
 def get_seller_products(
     db: Session = Depends(get_db),
@@ -1623,7 +2211,7 @@ def get_seller_products(
     products = db.query(ProductModel).filter(
         ProductModel.seller_id == current_seller.id
     ).order_by(ProductModel.id.desc()).all()
-    return [normalize_product_gender(p) for p in products]
+    return [normalize_product_gender(p, db) for p in products]
 
 @app.post("/seller/products/create", response_model=ProductSchema, tags=["Seller"])
 def create_seller_product(
@@ -1632,18 +2220,122 @@ def create_seller_product(
     current_seller: User = Depends(seller_only)
 ):
     """Create a new product (seller only)"""
-    new_product = ProductModel(
-        **product.model_dump(),
-        seller_id=current_seller.id,
-        is_verified=False,  # Requires admin verification
-        verification_status="Pending",  # Set to Pending for admin review
-        submitted_at=datetime.utcnow()  # Record submission time
-    )
-    db.add(new_product)
-    db.commit()
-    db.refresh(new_product)
-    normalize_product_gender(new_product)
-    return new_product
+    try:
+        # Log the raw product object before model_dump
+        logger.info(f"Received product create request - Name: {product.name}, Price: {product.price}")
+        logger.info(f"Raw product - sizes type: {type(product.sizes)}, colors type: {type(product.colors)}, specifications type: {type(product.specifications)}")
+        
+        product_data = product.model_dump()
+        
+        # Log incoming data for debugging
+        logger.info(f"Creating product - Name: {product_data.get('name')}, Price: {product_data.get('price')}, Discounted: {product_data.get('discounted_price')}")
+        logger.info(f"Product data - sizes: {product_data.get('sizes')} (type: {type(product_data.get('sizes'))}), colors: {product_data.get('colors')} (type: {type(product_data.get('colors'))}), specifications: {product_data.get('specifications')} (type: {type(product_data.get('specifications'))})")
+        
+        # Normalize and serialize JSON fields - handle None, empty lists, and empty dicts properly
+        # Sizes: convert empty list to None for DB storage
+        if 'sizes' in product_data:
+            if isinstance(product_data['sizes'], list):
+                if len(product_data['sizes']) > 0:
+                    product_data['sizes'] = serialize_json_field(product_data['sizes'])
+                else:
+                    product_data['sizes'] = None
+            elif product_data['sizes'] is None:
+                product_data['sizes'] = None
+            else:
+                logger.warning(f"Unexpected type for sizes: {type(product_data['sizes'])}")
+                product_data['sizes'] = None
+        
+        # Colors: convert empty list to None for DB storage
+        if 'colors' in product_data:
+            if isinstance(product_data['colors'], list):
+                if len(product_data['colors']) > 0:
+                    product_data['colors'] = serialize_json_field(product_data['colors'])
+                else:
+                    product_data['colors'] = None
+            elif product_data['colors'] is None:
+                product_data['colors'] = None
+            else:
+                logger.warning(f"Unexpected type for colors: {type(product_data['colors'])}")
+                product_data['colors'] = None
+        
+        # Variants (legacy_variants in DB): convert empty dict to None for DB storage
+        # Map 'variants' from schema to 'legacy_variants' for ProductModel
+        if 'variants' in product_data:
+            if isinstance(product_data['variants'], dict):
+                if len(product_data['variants']) > 0:
+                    product_data['legacy_variants'] = serialize_json_field(product_data['variants'])
+                else:
+                    product_data['legacy_variants'] = None
+            elif product_data['variants'] is None:
+                product_data['legacy_variants'] = None
+            else:
+                logger.warning(f"Unexpected type for variants: {type(product_data['variants'])}")
+                product_data['legacy_variants'] = None
+            # Remove 'variants' key since ProductModel uses 'legacy_variants'
+            del product_data['variants']
+        
+        # Specifications: convert empty dict to None for DB storage
+        if 'specifications' in product_data:
+            if isinstance(product_data['specifications'], dict):
+                if len(product_data['specifications']) > 0:
+                    product_data['specifications'] = serialize_json_field(product_data['specifications'])
+                else:
+                    product_data['specifications'] = None
+            elif product_data['specifications'] is None:
+                product_data['specifications'] = None
+            else:
+                logger.warning(f"Unexpected type for specifications: {type(product_data['specifications'])}")
+                product_data['specifications'] = None
+        
+        logger.info(f"Serialized product data - sizes: {product_data.get('sizes')}, colors: {product_data.get('colors')}, specifications: {product_data.get('specifications')}")
+        
+        # Remove any fields that don't exist in ProductModel (like product_variants from schema)
+        # Note: 'variants' has already been mapped to 'legacy_variants' above
+        model_fields = {
+            'name', 'description', 'image_url', 'price', 'discounted_price', 
+            'gender', 'category', 'sizes', 'colors', 'legacy_variants', 
+            'size_fit', 'material_care', 'specifications'
+        }
+        filtered_data = {k: v for k, v in product_data.items() if k in model_fields}
+        
+        logger.info(f"About to create ProductModel with data keys: {list(filtered_data.keys())}")
+        logger.info(f"ProductModel fields - sizes: {filtered_data.get('sizes')}, colors: {filtered_data.get('colors')}, specifications: {filtered_data.get('specifications')}")
+        
+        new_product = ProductModel(
+            **filtered_data,
+            seller_id=current_seller.id,
+            is_verified=False,  # Requires admin verification
+            verification_status="Pending",  # Set to Pending for admin review
+            submitted_at=datetime.utcnow()  # Record submission time
+        )
+        logger.info(f"ProductModel created, about to add to DB")
+        db.add(new_product)
+        logger.info(f"ProductModel added to session, about to commit")
+        db.commit()
+        logger.info(f"Committed to DB, about to refresh")
+        db.refresh(new_product)
+        logger.info(f"Refreshed, about to normalize")
+        # Normalize product for response (deserialize JSON fields back to Python objects)
+        # This modifies the SQLAlchemy object in-place to convert JSON strings to Python objects
+        normalize_product_gender(new_product, db)
+        logger.info(f"Normalized - sizes: {new_product.sizes}, colors: {new_product.colors}, specifications: {new_product.specifications}")
+        logger.info(f"About to return - Product ID: {new_product.id}")
+        
+        # The normalize_product_gender function has converted:
+        # - JSON strings -> Python lists/dicts (or None if empty)
+        # - None values remain None (which is valid for ProductSchema)
+        # ProductSchema expects: sizes: List[str] | None, colors: List[str] | None, specifications: Dict[str, str] | None
+        return new_product
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error creating product: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error args: {e.args}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create product: {str(e)}")
 
 @app.post("/seller/products/bulk", response_model=BulkProductCreateResponse, tags=["Seller"])
 def create_seller_products_bulk(
@@ -1692,7 +2384,7 @@ def create_seller_products_bulk(
             db.commit()
             for product in created_products:
                 db.refresh(product)
-                normalize_product_gender(product)
+                normalize_product_gender(product, db)
         else:
             db.rollback()
             raise HTTPException(status_code=400, detail="No products were created. Errors: " + "; ".join(errors))
@@ -1718,25 +2410,206 @@ def update_seller_product(
     current_seller: User = Depends(seller_only)
 ):
     """Update a product (seller only, only their own products)"""
-    existing_product = db.query(ProductModel).filter(
+    try:
+        existing_product = db.query(ProductModel).filter(
+            ProductModel.id == product_id,
+            ProductModel.seller_id == current_seller.id
+        ).first()
+        
+        if not existing_product:
+            raise HTTPException(status_code=404, detail="Product not found or access denied")
+        
+        # Update fields
+        product_data = product.model_dump()
+        
+        # Log incoming data for debugging
+        logger.info(f"Updating product {product_id} - Name: {product_data.get('name')}, Price: {product_data.get('price')}")
+        logger.info(f"Product data - sizes: {product_data.get('sizes')}, colors: {product_data.get('colors')}, specifications: {product_data.get('specifications')}")
+        
+        # Normalize and serialize JSON fields - same logic as create
+        if 'sizes' in product_data:
+            if isinstance(product_data['sizes'], list):
+                if len(product_data['sizes']) > 0:
+                    product_data['sizes'] = serialize_json_field(product_data['sizes'])
+                else:
+                    product_data['sizes'] = None
+            elif product_data['sizes'] is None:
+                product_data['sizes'] = None
+            else:
+                logger.warning(f"Unexpected type for sizes: {type(product_data['sizes'])}")
+                product_data['sizes'] = None
+        
+        if 'colors' in product_data:
+            if isinstance(product_data['colors'], list):
+                if len(product_data['colors']) > 0:
+                    product_data['colors'] = serialize_json_field(product_data['colors'])
+                else:
+                    product_data['colors'] = None
+            elif product_data['colors'] is None:
+                product_data['colors'] = None
+            else:
+                logger.warning(f"Unexpected type for colors: {type(product_data['colors'])}")
+                product_data['colors'] = None
+        
+        # Variants (legacy_variants in DB): convert empty dict to None for DB storage
+        # Map 'variants' from schema to 'legacy_variants' for ProductModel
+        if 'variants' in product_data:
+            if isinstance(product_data['variants'], dict):
+                if len(product_data['variants']) > 0:
+                    product_data['legacy_variants'] = serialize_json_field(product_data['variants'])
+                else:
+                    product_data['legacy_variants'] = None
+            elif product_data['variants'] is None:
+                product_data['legacy_variants'] = None
+            else:
+                logger.warning(f"Unexpected type for variants: {type(product_data['variants'])}")
+                product_data['legacy_variants'] = None
+            # Remove 'variants' key since ProductModel uses 'legacy_variants'
+            del product_data['variants']
+        
+        if 'specifications' in product_data:
+            if isinstance(product_data['specifications'], dict):
+                if len(product_data['specifications']) > 0:
+                    product_data['specifications'] = serialize_json_field(product_data['specifications'])
+                else:
+                    product_data['specifications'] = None
+            elif product_data['specifications'] is None:
+                product_data['specifications'] = None
+            else:
+                logger.warning(f"Unexpected type for specifications: {type(product_data['specifications'])}")
+                product_data['specifications'] = None
+        
+        logger.info(f"Serialized product data - sizes: {product_data.get('sizes')}, colors: {product_data.get('colors')}, specifications: {product_data.get('specifications')}")
+        
+        for key, value in product_data.items():
+            setattr(existing_product, key, value)
+        
+        # Reset verification status when product is updated
+        existing_product.is_verified = False
+        existing_product.verification_status = "Pending"
+        
+        db.commit()
+        db.refresh(existing_product)
+        normalize_product_gender(existing_product, db)
+        logger.info(f"Product updated successfully - ID: {existing_product.id}")
+        return existing_product
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating product: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update product: {str(e)}")
+
+# Seller Variant APIs
+@app.post("/seller/products/{product_id}/variants", response_model=VariantResponse, tags=["Seller"])
+def create_product_variant(
+    product_id: int,
+    variant: VariantCreate,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Create a variant for a product (seller only, only their own products)"""
+    product = db.query(ProductModel).filter(
         ProductModel.id == product_id,
         ProductModel.seller_id == current_seller.id
     ).first()
     
-    if not existing_product:
+    if not product:
         raise HTTPException(status_code=404, detail="Product not found or access denied")
     
-    # Update fields
-    for key, value in product.model_dump().items():
-        setattr(existing_product, key, value)
-    
-    # Reset verification status when product is updated
-    existing_product.is_verified = False
-    
+    new_variant = ProductVariant(
+        product_id=product_id,
+        size=variant.size,
+        color=variant.color,
+        image_url=variant.image_url,
+        price=variant.price,
+        stock=variant.stock
+    )
+    db.add(new_variant)
     db.commit()
-    db.refresh(existing_product)
-    normalize_product_gender(existing_product)
-    return existing_product
+    db.refresh(new_variant)
+    # Normalize image URL
+    if new_variant.image_url:
+        new_variant.image_url = normalize_image_url(new_variant.image_url)
+    return new_variant
+
+@app.get("/seller/products/{product_id}/variants", response_model=list[VariantResponse], tags=["Seller"])
+def get_product_variants(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Get all variants for a product (seller only, only their own products)"""
+    product = db.query(ProductModel).filter(
+        ProductModel.id == product_id,
+        ProductModel.seller_id == current_seller.id
+    ).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found or access denied")
+    
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product_id).all()
+    # Normalize image URLs in variants
+    for variant in variants:
+        if variant.image_url:
+            variant.image_url = normalize_image_url(variant.image_url)
+    return variants
+
+@app.patch("/seller/variants/{variant_id}", response_model=VariantResponse, tags=["Seller"])
+def update_product_variant(
+    variant_id: int,
+    variant: VariantUpdate,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Update a variant (seller only, only their own products)"""
+    existing_variant = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
+    if not existing_variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    # Verify product belongs to seller
+    product = db.query(ProductModel).filter(
+        ProductModel.id == existing_variant.product_id,
+        ProductModel.seller_id == current_seller.id
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Variant not found or access denied")
+    
+    # Update fields
+    variant_data = variant.model_dump(exclude_unset=True)
+    for key, value in variant_data.items():
+        setattr(existing_variant, key, value)
+    
+    existing_variant.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(existing_variant)
+    # Normalize image URL
+    if existing_variant.image_url:
+        existing_variant.image_url = normalize_image_url(existing_variant.image_url)
+    return existing_variant
+
+@app.delete("/seller/variants/{variant_id}", tags=["Seller"])
+def delete_product_variant(
+    variant_id: int,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(seller_only)
+):
+    """Delete a variant (seller only, only their own products)"""
+    variant = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    # Verify product belongs to seller
+    product = db.query(ProductModel).filter(
+        ProductModel.id == variant.product_id,
+        ProductModel.seller_id == current_seller.id
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Variant not found or access denied")
+    
+    db.delete(variant)
+    db.commit()
+    return {"message": "Variant deleted successfully"}
 
 @app.delete("/seller/products/delete/{product_id}", tags=["Seller"])
 def delete_seller_product(
@@ -3472,6 +4345,309 @@ def verify_product_legacy(
     db.refresh(product)
     normalize_product_gender(product)
     return product
+
+# ==================== ADMIN PRODUCT MANAGEMENT ====================
+
+@app.get("/admin/products", response_model=list[AdminProductResponse], tags=["Admin"])
+def get_all_admin_products(
+    status_filter: str | None = Query(None, description="Filter by verification_status: Pending, Approved, Rejected"),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get all products with seller info and variants (admin only)"""
+    query = db.query(ProductModel)
+    
+    if status_filter:
+        query = query.filter(ProductModel.verification_status == status_filter)
+    
+    products = query.order_by(desc(ProductModel.id)).all()
+    
+    result = []
+    for product in products:
+        normalize_product_gender(product)
+        
+        # Get seller info
+        seller_info = None
+        if product.seller_id:
+            seller = db.query(User).filter(User.id == product.seller_id).first()
+            if seller:
+                seller_info = SellerInfo(id=seller.id, username=seller.username, email=seller.email)
+        
+        # Get variants
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        # Normalize variant image URLs
+        for variant in variants:
+            if variant.image_url:
+                variant.image_url = normalize_image_url(variant.image_url)
+        
+        # Normalize product image URL
+        image_url = normalize_image_url(product.image_url)
+        
+        result.append(AdminProductResponse(
+            id=product.id,
+            name=product.name,
+            description=product.description,
+            image_url=image_url,
+            price=product.price,
+            discounted_price=product.discounted_price,
+            gender=product.gender,
+            category=product.category,
+            verification_status=product.verification_status,
+            seller=seller_info,
+            variants=[VariantResponse.model_validate(v) for v in variants]
+        ))
+    
+    return result
+
+@app.get("/admin/products/{product_id}/full", response_model=AdminProductResponse, tags=["Admin"])
+def get_admin_product_full(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get product by ID with seller info and variants (admin only)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    normalize_product_gender(product)
+    
+    # Get seller info
+    seller_info = None
+    if product.seller_id:
+        seller = db.query(User).filter(User.id == product.seller_id).first()
+        if seller:
+            seller_info = SellerInfo(id=seller.id, username=seller.username, email=seller.email)
+    
+    # Get variants
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    # Normalize variant image URLs
+    for variant in variants:
+        if variant.image_url:
+            variant.image_url = normalize_image_url(variant.image_url)
+    
+    # Normalize product image URL
+    image_url = normalize_image_url(product.image_url)
+    
+    return AdminProductResponse(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        image_url=image_url,
+        price=product.price,
+        discounted_price=product.discounted_price,
+        gender=product.gender,
+        category=product.category,
+        verification_status=product.verification_status,
+        seller=seller_info,
+        variants=[VariantResponse.model_validate(v) for v in variants]
+    )
+
+@app.patch("/admin/products/{product_id}", response_model=AdminProductResponse, tags=["Admin"])
+def update_admin_product(
+    product_id: int,
+    product_update: ProductUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Update product details (admin only)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Update fields
+    update_data = product_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(product, key, value)
+    
+    # Normalize gender if updated
+    if 'gender' in update_data:
+        normalize_product_gender(product)
+    
+    db.commit()
+    db.refresh(product)
+    
+    # Get seller info
+    seller_info = None
+    if product.seller_id:
+        seller = db.query(User).filter(User.id == product.seller_id).first()
+        if seller:
+            seller_info = SellerInfo(id=seller.id, username=seller.username, email=seller.email)
+    
+    # Get variants
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    for variant in variants:
+        if variant.image_url:
+            variant.image_url = normalize_image_url(variant.image_url)
+    
+    image_url = normalize_image_url(product.image_url)
+    
+    return AdminProductResponse(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        image_url=image_url,
+        price=product.price,
+        discounted_price=product.discounted_price,
+        gender=product.gender,
+        category=product.category,
+        verification_status=product.verification_status,
+        seller=seller_info,
+        variants=[VariantResponse.model_validate(v) for v in variants]
+    )
+
+@app.delete("/admin/products/{product_id}", tags=["Admin"])
+def delete_admin_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Delete a product entirely (admin only) - SQLite safe deletion"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    try:
+        # Delete associated variants (cascade should handle this, but explicit for clarity)
+        db.query(ProductVariant).filter(ProductVariant.product_id == product_id).delete()
+        
+        # Delete associated cart items
+        db.query(CartItem).filter(CartItem.product_id == product_id).delete()
+        
+        # For order_items, set product_id to NULL (SQLite safe - preserves order history)
+        # Note: SQLite doesn't support SET NULL on DELETE, so we do it manually
+        order_items = db.query(OrderItem).filter(OrderItem.product_id == product_id).all()
+        for order_item in order_items:
+            order_item.product_id = None
+        
+        # Delete associated wishlist items
+        db.query(WishlistItem).filter(WishlistItem.product_id == product_id).delete()
+        
+        # Delete associated reviews
+        db.query(Review).filter(Review.product_id == product_id).delete()
+        
+        # Finally, delete the product
+        db.delete(product)
+        db.commit()
+        
+        return {"message": "Product deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Error deleting product {product_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete product: {str(e)}")
+
+@app.post("/admin/products/{product_id}/variant", response_model=VariantResponse, tags=["Admin"])
+def create_admin_product_variant(
+    product_id: int,
+    variant: VariantCreate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Create a variant for a product (admin only)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    new_variant = ProductVariant(
+        product_id=product_id,
+        size=variant.size,
+        color=variant.color,
+        image_url=variant.image_url,
+        price=variant.price,
+        stock=variant.stock
+    )
+    db.add(new_variant)
+    db.commit()
+    db.refresh(new_variant)
+    
+    # Normalize image URL
+    if new_variant.image_url:
+        new_variant.image_url = normalize_image_url(new_variant.image_url)
+    
+    return new_variant
+
+@app.patch("/admin/products/{product_id}/variant/{variant_id}", response_model=VariantResponse, tags=["Admin"])
+def update_admin_product_variant(
+    product_id: int,
+    variant_id: int,
+    variant: VariantUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Update a variant (admin only)"""
+    # Verify product exists
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Get variant and verify it belongs to the product
+    existing_variant = db.query(ProductVariant).filter(
+        ProductVariant.id == variant_id,
+        ProductVariant.product_id == product_id
+    ).first()
+    
+    if not existing_variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    # Update fields
+    variant_data = variant.model_dump(exclude_unset=True)
+    for key, value in variant_data.items():
+        setattr(existing_variant, key, value)
+    
+    existing_variant.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(existing_variant)
+    
+    # Normalize image URL
+    if existing_variant.image_url:
+        existing_variant.image_url = normalize_image_url(existing_variant.image_url)
+    
+    return existing_variant
+
+@app.delete("/admin/products/{product_id}/variant/{variant_id}", tags=["Admin"])
+def delete_admin_product_variant(
+    product_id: int,
+    variant_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Delete a variant (admin only)"""
+    # Verify product exists
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Get variant and verify it belongs to the product
+    variant = db.query(ProductVariant).filter(
+        ProductVariant.id == variant_id,
+        ProductVariant.product_id == product_id
+    ).first()
+    
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    try:
+        # For order_items with this variant, set variant_id to NULL (SQLite safe)
+        order_items = db.query(OrderItem).filter(OrderItem.variant_id == variant_id).all()
+        for order_item in order_items:
+            order_item.variant_id = None
+        
+        # Delete cart items with this variant
+        db.query(CartItem).filter(CartItem.variant_id == variant_id).delete()
+        
+        # Delete the variant
+        db.delete(variant)
+        db.commit()
+        
+        return {"message": "Variant deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Error deleting variant {variant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete variant: {str(e)}")
 
 @app.post("/admin/create-super-admin", tags=["Admin"])
 def create_super_admin(

@@ -74,23 +74,22 @@ export function AuthProvider({ children }) {
     const { data } = await API.post('/users/login', params, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-    localStorage.setItem('token', data.access_token);
-    localStorage.setItem('username', data.username || username);
     
-    // Verify admin access
-    try {
-      await API.get('/admin/sellers');
-      const userRole = 'admin';
-      localStorage.setItem('userRole', userRole);
-      setUser({ username: data.username || username, role: userRole });
-      return { ...data, role: userRole };
-    } catch {
+    // Check if user is admin from login response
+    if (data.role !== 'admin') {
       // Not an admin - clear and throw error
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       localStorage.removeItem('userRole');
       throw new Error('Access denied. Admin credentials required.');
     }
+    
+    // User is admin - set up session
+    localStorage.setItem('token', data.access_token);
+    localStorage.setItem('username', data.username || username);
+    localStorage.setItem('userRole', 'admin');
+    setUser({ username: data.username || username, role: 'admin' });
+    return { ...data, role: 'admin' };
   };
 
   const signOut = async () => {

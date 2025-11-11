@@ -22,7 +22,17 @@ class Product(Base):
     verification_notes = Column(Text, nullable=True)
     submitted_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     
+    # New product detail fields
+    sizes = Column(Text, nullable=True)  # JSON array stored as TEXT: ["S", "M", "L", "XL"]
+    colors = Column(Text, nullable=True)  # JSON array stored as TEXT: ["Red", "Blue", "Black"]
+    legacy_variants = Column("variants", Text, nullable=True)  # JSON object: {"Red": "/images/red.jpg", "Blue": "/images/blue.jpg"} - maps to 'variants' column in DB
+    size_fit = Column(Text, nullable=True)  # Size & Fit description
+    material_care = Column(Text, nullable=True)  # Material & Care description
+    specifications = Column(Text, nullable=True)  # JSON object: {"Fabric": "Cotton", "Fit": "Regular"}
+    
     seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
+    reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
+    variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
 
 class User(Base):
     __tablename__ = "users"
@@ -68,11 +78,15 @@ class CartItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     product_id = Column(Integer, ForeignKey("products.id"))
+    variant_id = Column(Integer, ForeignKey("product_variants.id"), nullable=True, index=True)
     quantity = Column(Integer, default=1)
+    size = Column(String, nullable=True)  # Selected size (e.g., "M", "L") - kept for backward compatibility
+    color = Column(String, nullable=True)  # Selected color (e.g., "Red", "Blue") - kept for backward compatibility
 
     # Many-to-one relationships
     user = relationship("User", back_populates="cart_items")
     product = relationship("Product")
+    variant = relationship("ProductVariant")
 
 # ----- Order model -----
 class Order(Base):
@@ -128,8 +142,13 @@ class OrderItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"))
     product_id = Column(Integer, ForeignKey("products.id"))
+    variant_id = Column(Integer, ForeignKey("product_variants.id"), nullable=True, index=True)
     quantity = Column(Integer, default=1)
     price = Column(Float, nullable=False)  # price at time of purchase
+    # Variant snapshot fields (for display after variant might be deleted)
+    variant_size = Column(String, nullable=True)
+    variant_color = Column(String, nullable=True)
+    variant_image_url = Column(String, nullable=True)
     
     # Seller routing fields
     seller_id = Column(Integer, index=True, nullable=True)  # copy from product.seller_id at order creation
@@ -146,6 +165,7 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product")
+    variant = relationship("ProductVariant")
 
 class WishlistItem(Base):
     __tablename__ = "wishlist_items"
@@ -157,6 +177,34 @@ class WishlistItem(Base):
 
     user = relationship("User", back_populates="wishlist_items")
     product = relationship("Product")
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    rating = Column(Integer, nullable=False)  # 1-5
+    review_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="reviews")
+    user = relationship("User")
+
+class ProductVariant(Base):
+    __tablename__ = "product_variants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    size = Column(String, nullable=True)
+    color = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)
+    price = Column(Float, nullable=True)  # Optional: if null, use product price
+    stock = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    product = relationship("Product", back_populates="variants")
 
 
 

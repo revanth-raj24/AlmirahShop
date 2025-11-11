@@ -314,9 +314,9 @@ export default function AdminDashboard() {
             </div>
           </button>
           <button
-            onClick={() => setActiveTab('sellers')}
+            onClick={() => navigate('/admin/sellers')}
             className={`px-6 py-3 font-medium transition-colors whitespace-nowrap ${
-              activeTab === 'sellers'
+              window.location.pathname === '/admin/sellers'
                 ? 'border-b-2 border-neutral-900 text-neutral-900'
                 : 'text-neutral-600 hover:text-neutral-900'
             }`}
