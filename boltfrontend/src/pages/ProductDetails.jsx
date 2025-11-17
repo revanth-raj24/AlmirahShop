@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Heart, Star, ChevronDown, ChevronUp } from 'lucide-react';
 import { resolveImageUrl } from '../utils/imageUtils';
 import ProductCard from '../components/ProductCard';
+import SizeGuideModal from '../components/SizeGuideModal';
 
 export default function ProductDetails() {
   const { productId } = useParams();
@@ -21,6 +22,7 @@ export default function ProductDetails() {
   const [reviews, setReviews] = useState([]);
   const [similarProducts, setSimilarProducts] = useState([]);
   const [showReviewModal, setShowReviewModal] = useState(false);
+  const [showSizeGuideModal, setShowSizeGuideModal] = useState(false);
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewText, setReviewText] = useState('');
   const [expandedSections, setExpandedSections] = useState({
@@ -304,6 +306,13 @@ export default function ProductDetails() {
                   </button>
                 ))}
               </div>
+              <button
+                type="button"
+                className="mt-3 text-sm text-neutral-600 hover:text-neutral-900 underline underline-offset-4"
+                onClick={() => setShowSizeGuideModal(true)}
+              >
+                View Size Guide
+              </button>
             </div>
           )}
 
@@ -496,6 +505,9 @@ export default function ProductDetails() {
           </div>
         </div>
       )}
+
+      {/* Size Guide Modal */}
+      <SizeGuideModal open={showSizeGuideModal} onClose={() => setShowSizeGuideModal(false)} />
 
       {/* Review Modal */}
       {showReviewModal && (

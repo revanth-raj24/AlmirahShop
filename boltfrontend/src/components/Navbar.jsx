@@ -69,6 +69,12 @@ export default function Navbar() {
             >
               Women
             </Link>
+            <Link
+              to="/size-guide"
+              className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
+            >
+              Size Guide
+            </Link>
           </div>
 
           <form onSubmit={handleSearch} className="hidden md:block flex-1 max-w-md mx-8">
@@ -192,6 +198,12 @@ export default function Navbar() {
               className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
             >
               Women
+            </Link>
+            <Link
+              to="/size-guide"
+              className="text-sm uppercase tracking-wider text-neutral-600 hover:text-neutral-900 transition-colors duration-300"
+            >
+              Size Guide
             </Link>
           </div>
         </div>

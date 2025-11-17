@@ -14,52 +14,57 @@ export const useAuth = () => {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sellerStatusChecked, setSellerStatusChecked] = useState(false);
 
-  const fetchUserProfile = async () => {
+  const fetchSellerStatus = async () => {
     try {
       const token = localStorage.getItem('token');
-      if (token) {
-        // Check if user is seller
-        try {
-          await API.get('/seller/products');
-          localStorage.setItem('userRole', 'seller');
-          setUser(prev => ({ ...prev, role: 'seller' }));
-          return;
-        } catch (sellerErr) {
-          // Not a seller - clear token and redirect to login
-          localStorage.removeItem('token');
-          localStorage.removeItem('username');
-          localStorage.removeItem('userRole');
-          setUser(null);
-        }
+      if (!token) {
+        setUser(null);
+        setSellerStatusChecked(true);
+        return;
       }
+
+      const { data } = await API.get('/seller/status');
+      localStorage.setItem('userRole', 'seller');
+      localStorage.setItem('isApproved', String(data.is_approved));
+      localStorage.setItem('username', data.username);
+
+      setUser({
+        username: data.username,
+        role: 'seller',
+        isApproved: data.is_approved,
+        email: data.email,
+        sellerId: data.seller_id,
+      });
     } catch (err) {
-      // Silent fail, clear user
+      // If token is invalid or user is not seller, clear auth
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       localStorage.removeItem('userRole');
+      localStorage.removeItem('isApproved');
       setUser(null);
+    } finally {
+      setSellerStatusChecked(true);
     }
   };
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    const username = localStorage.getItem('username');
     const userRole = localStorage.getItem('userRole');
-    if (token && username && userRole === 'seller') {
-      setUser({ username, role: 'seller' });
-      // Verify seller access
-      if (token) {
-        fetchUserProfile();
-      }
+
+    if (token && userRole === 'seller') {
+      fetchSellerStatus().finally(() => setLoading(false));
     } else {
       // Clear if not seller
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       localStorage.removeItem('userRole');
+      localStorage.removeItem('isApproved');
       setUser(null);
+      setLoading(false);
+      setSellerStatusChecked(true);
     }
-    setLoading(false);
   }, []);
 
   const signUpSeller = async ({ username, email, password, phone }) => {
@@ -82,33 +87,43 @@ export function AuthProvider({ children }) {
     });
     localStorage.setItem('token', data.access_token);
     localStorage.setItem('username', data.username || username);
-    
-    // Verify seller access
-    try {
-      await API.get('/seller/products');
-      const userRole = 'seller';
-      localStorage.setItem('userRole', userRole);
-      setUser({ username: data.username || username, role: userRole });
-      return { ...data, role: userRole };
-    } catch {
-      // Not a seller - clear and throw error
+
+    // Determine role from response; only proceed for sellers in this frontend
+    if (data.role !== 'seller') {
       localStorage.removeItem('token');
       localStorage.removeItem('username');
       localStorage.removeItem('userRole');
+      localStorage.removeItem('isApproved');
       throw new Error('Access denied. Seller credentials required.');
     }
+
+    localStorage.setItem('userRole', 'seller');
+    if (typeof data.is_approved === 'boolean') {
+      localStorage.setItem('isApproved', String(data.is_approved));
+    }
+
+    const userData = {
+      username: data.username || username,
+      role: 'seller',
+      isApproved: !!data.is_approved,
+    };
+
+    setUser(userData);
+    return userData;
   };
 
   const signOut = async () => {
     localStorage.removeItem('token');
     localStorage.removeItem('username');
     localStorage.removeItem('userRole');
+    localStorage.removeItem('isApproved');
     setUser(null);
   };
 
   const value = {
     user,
     loading,
+    sellerStatusChecked,
     signUpSeller,
     signIn,
     signOut,

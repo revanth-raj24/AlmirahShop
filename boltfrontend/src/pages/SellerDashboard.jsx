@@ -6,6 +6,7 @@ import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle } fro
 import Button from '../components/Button';
 import Input from '../components/Input';
 import { resolveImageUrl } from '../utils/imageUtils';
+import SizeGuideModal from '../components/SizeGuideModal';
 
 export default function SellerDashboard() {
   const { user } = useAuth();
@@ -18,6 +19,7 @@ export default function SellerDashboard() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [showSizeGuideModal, setShowSizeGuideModal] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -320,6 +322,19 @@ export default function SellerDashboard() {
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   />
+                  <div className="bg-neutral-50 border border-dashed border-neutral-300 px-4 py-3 rounded-lg text-sm flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-neutral-600">
+                      <p className="font-medium text-neutral-900">Need precise measurements?</p>
+                      <p>Reference our universal chart before entering size options.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSizeGuideModal(true)}
+                      className="text-neutral-900 underline underline-offset-4 font-medium"
+                    >
+                      View Standard Size Guide
+                    </button>
+                  </div>
                   <div className="flex gap-3">
                     <Button type="submit">
                       {editingProduct ? 'Update Product' : 'Create Product'}
@@ -346,6 +361,16 @@ export default function SellerDashboard() {
                 <p className="text-sm text-neutral-600 mb-4">
                   Format: name|price|description|image_url|discounted_price|gender|category (one per line)
                 </p>
+                <div className="bg-neutral-50 border border-dashed border-neutral-300 px-4 py-3 rounded-lg text-sm mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <span className="text-neutral-600">Unsure about size abbreviations? Stay consistent with our chart.</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSizeGuideModal(true)}
+                    className="text-neutral-900 underline underline-offset-4 font-medium"
+                  >
+                    View Standard Size Guide
+                  </button>
+                </div>
                 <form onSubmit={handleBulkSubmit} className="space-y-4">
                   <textarea
                     value={bulkData}
@@ -475,6 +500,7 @@ export default function SellerDashboard() {
           </div>
         )}
       </div>
+      <SizeGuideModal open={showSizeGuideModal} onClose={() => setShowSizeGuideModal(false)} />
     </div>
   );
 }
