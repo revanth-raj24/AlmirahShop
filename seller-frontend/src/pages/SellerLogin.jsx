@@ -33,9 +33,13 @@ export default function SellerLogin() {
     setLoading(true);
 
     try {
-      await signIn(username, password);
-      // Redirect to seller dashboard
-      navigate('/seller/dashboard');
+      const data = await signIn(username, password);
+      // Redirect based on approval status
+      if (data.isApproved) {
+        navigate('/seller/dashboard');
+      } else {
+        navigate('/seller/verification-pending');
+      }
     } catch (err) {
       const errorDetail = err?.response?.data?.detail || err?.message || 'Invalid credentials. Please try again.';
       setError(errorDetail);

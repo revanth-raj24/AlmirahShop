@@ -1244,7 +1244,6 @@ def login_user(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Account not activated. Please verify your email with the OTP sent to your inbox."
         )
-
     access_token_expires = timedelta(minutes=30)
     access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
 
@@ -1255,11 +1254,45 @@ def login_user(
     elif user.role == "seller":
         user_role = "seller"
 
+    # Include seller approval status when relevant so frontend can route correctly
+    is_approved = None
+    if user_role == "seller":
+        is_approved = bool(getattr(user, "is_approved", False))
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "role": user_role,
-        "username": user.username
+        "username": user.username,
+        "is_approved": is_approved
+    }
+
+@app.get("/seller/status", tags=["Seller"])
+def get_seller_status(
+    db: Session = Depends(get_db),
+    current_user_obj: User = Depends(get_current_user_obj)
+):
+    """
+    Helper endpoint for seller frontend to poll approval status.
+
+    - Returns is_approved flag, username, and seller_id for authenticated sellers.
+    - Returns 403 for non-seller roles.
+    """
+    if current_user_obj.role != "seller":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seller access required"
+        )
+
+    refreshed = db.query(User).filter(User.id == current_user_obj.id).first()
+    if not refreshed:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "is_approved": bool(getattr(refreshed, "is_approved", False)),
+        "username": refreshed.username,
+        "seller_id": refreshed.id,
+        "email": refreshed.email,
     }
 
 @app.get("/profile", tags=["Users"])

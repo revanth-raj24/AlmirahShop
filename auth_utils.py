@@ -84,16 +84,23 @@ def admin_only(
 def seller_only(
     current_user_obj: User = Depends(get_current_user_obj)
 ) -> User:
-    """Dependency to ensure user is seller and approved"""
+    """
+    Dependency to ensure user is seller and approved.
+
+    NOTE: Login is allowed for unapproved sellers. This dependency is only
+    used for seller-protected resources and will return a 403 with a
+    machine-readable detail when the seller is not yet approved.
+    """
     if current_user_obj.role != "seller":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Seller access required"
         )
     if not current_user_obj.is_approved:
+        # Keep semantics but make detail stable for frontend checks
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seller account not approved yet"
+            detail="SellerNotApproved"
         )
     return current_user_obj
 

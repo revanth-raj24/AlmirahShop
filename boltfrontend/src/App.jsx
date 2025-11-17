@@ -13,6 +13,7 @@ import Cart from './pages/Cart';
 import Orders from './pages/Orders';
 import Wishlist from './pages/Wishlist';
 import ProductDetails from './pages/ProductDetails';
+import SizeGuide from './pages/SizeGuide';
 import Profile from './pages/profile/Profile';
 import EditProfile from './pages/profile/EditProfile';
 import ChangePassword from './pages/profile/ChangePassword';
@@ -43,6 +44,7 @@ function App() {
               <Route path="/orders" element={<Orders />} />
               <Route path="/wishlist" element={<Wishlist />} />
               <Route path="/product/:productId" element={<ProductDetails />} />
+              <Route path="/size-guide" element={<SizeGuide />} />
             </Routes>
           </main>
           <Footer />

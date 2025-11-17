@@ -58,9 +58,9 @@ export default function Footer() {
                 </a>
               </li>
               <li>
-                <a href="#" className="text-neutral-50/70 hover:text-neutral-50 transition-colors duration-300 text-sm">
+                <Link to="/size-guide" className="text-neutral-50/70 hover:text-neutral-50 transition-colors duration-300 text-sm">
                   Size Guide
-                </a>
+                </Link>
               </li>
             </ul>
           </div>
