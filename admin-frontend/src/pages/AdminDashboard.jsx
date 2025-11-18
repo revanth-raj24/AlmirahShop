@@ -6,7 +6,7 @@ import {
   CheckCircle, XCircle, Package, Users, AlertCircle, ShoppingCart, BarChart3,
   UserCheck, LogOut, Ban, Trash2, Eye, X, TrendingUp, DollarSign, ShoppingBag,
   UserPlus, PackageCheck, Clock, AlertTriangle, RefreshCw, Activity, Heart,
-  ArrowUpRight, ArrowDownRight
+  ArrowUpRight, ArrowDownRight, Warehouse
 } from 'lucide-react';
 import { resolveImageUrl } from '../utils/imageUtils';
 import Button from '../components/Button';
@@ -50,7 +50,7 @@ function AnimatedCounter({ value, duration = 1000 }) {
 }
 
 // KPI Card Component
-function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) {
+function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue', onClick }) {
   const colorClasses = {
     blue: 'bg-blue-50 border-blue-200 text-blue-700',
     green: 'bg-green-50 border-green-200 text-green-700',
@@ -61,7 +61,12 @@ function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) 
   };
 
   return (
-    <div className={`bg-white border-2 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow ${colorClasses[color]}`}>
+    <div 
+      onClick={onClick}
+      className={`bg-white border-2 rounded-lg p-6 shadow-sm transition-all ${
+        onClick ? 'cursor-pointer hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]' : 'hover:shadow-md'
+      } ${colorClasses[color]}`}
+    >
       <div className="flex items-center justify-between mb-4">
         <div className={`p-3 rounded-lg ${colorClasses[color].replace('50', '100')}`}>
           <Icon className="w-6 h-6" />
@@ -379,6 +384,19 @@ export default function AdminDashboard() {
               All Users ({usersCount})
             </div>
           </button>
+          <button
+            onClick={() => navigate('/admin/inventory')}
+            className={`px-6 py-3 font-medium transition-colors whitespace-nowrap ${
+              window.location.pathname === '/admin/inventory'
+                ? 'border-b-2 border-neutral-900 text-neutral-900'
+                : 'text-neutral-600 hover:text-neutral-900'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Warehouse className="w-5 h-5" />
+              Inventory
+            </div>
+          </button>
         </div>
 
         {/* Statistics Tab */}
@@ -409,6 +427,7 @@ export default function AdminDashboard() {
                       icon={Users}
                       subtitle={`${kpis.total_sellers} sellers, ${kpis.total_users - kpis.total_sellers} customers`}
                       color="blue"
+                      onClick={() => navigate('/admin/users')}
                     />
                     <KPICard
                       title="Total Sellers"
@@ -416,6 +435,7 @@ export default function AdminDashboard() {
                       icon={UserCheck}
                       subtitle={`${kpis.total_verified_sellers} verified`}
                       color="indigo"
+                      onClick={() => navigate('/admin/sellers')}
                     />
                     <KPICard
                       title="Pending Approvals"
@@ -423,6 +443,7 @@ export default function AdminDashboard() {
                       icon={Clock}
                       subtitle="Sellers awaiting approval"
                       color="yellow"
+                      onClick={() => navigate('/admin/sellers?filter=pending')}
                     />
                     <KPICard
                       title="Verified Sellers"
@@ -430,6 +451,7 @@ export default function AdminDashboard() {
                       icon={CheckCircle}
                       subtitle="Active and verified"
                       color="green"
+                      onClick={() => navigate('/admin/sellers?filter=approved')}
                     />
                   </>
                 ) : null}

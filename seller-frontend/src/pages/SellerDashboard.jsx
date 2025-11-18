@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogOut } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogOut, Warehouse, AlertTriangle } from 'lucide-react';
 import Button from '../components/Button';
 import Input from '../components/Input';
 import { resolveImageUrl } from '../utils/imageUtils';
@@ -388,6 +388,13 @@ export default function SellerDashboard() {
         <div className="flex items-center justify-between mb-8">
           <h1 className="font-serif text-4xl text-neutral-900">Seller Dashboard</h1>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/seller/inventory')}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 transition-colors rounded"
+            >
+              <Warehouse className="w-4 h-4" />
+              Inventory
+            </button>
             <button
               onClick={() => navigate('/seller/orders')}
               className="flex items-center gap-2 px-4 py-2 text-sm bg-neutral-900 text-white hover:bg-neutral-800 transition-colors rounded"

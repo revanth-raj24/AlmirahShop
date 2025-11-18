@@ -11,6 +11,8 @@ import SellerOrderDetail from './pages/SellerOrderDetail';
 import SellerReturns from './pages/SellerReturns';
 import SellerReturnDetail from './pages/SellerReturnDetail';
 import SellerVerificationPending from './pages/SellerVerificationPending';
+import SellerInventory from './pages/SellerInventory';
+import SellerLowStock from './pages/SellerLowStock';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -114,6 +116,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <SellerReturnDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/inventory"
+        element={
+          <ProtectedRoute>
+            <SellerInventory />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/seller/inventory/low-stock"
+        element={
+          <ProtectedRoute>
+            <SellerLowStock />
           </ProtectedRoute>
         }
       />

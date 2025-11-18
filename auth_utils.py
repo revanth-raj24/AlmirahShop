@@ -115,6 +115,100 @@ def customer_only(
         )
     return current_user_obj
 
+# ==================== NEW ROLE GUARDS (RBAC) ====================
+
+def require_admin(
+    current_user_obj: User = Depends(get_current_user_obj)
+) -> User:
+    """
+    Role guard: Only allows users with is_admin=True.
+    Returns 403 Forbidden if user is not an admin.
+    """
+    if not current_user_obj.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden"
+        )
+    return current_user_obj
+
+def require_seller(
+    current_user_obj: User = Depends(get_current_user_obj)
+) -> User:
+    """
+    Role guard: Only allows users with role=="seller" or is_seller==True.
+    Does NOT require approval - use require_approved_seller() for that.
+    Admins have full access to all endpoints, including seller endpoints.
+    Returns 403 Forbidden if user is not a seller (or admin).
+    """
+    # Admins have full access to everything
+    if current_user_obj.is_admin:
+        return current_user_obj
+    
+    # Check if user is a seller (either by role or is_seller flag)
+    is_seller = (
+        current_user_obj.role == "seller" or 
+        current_user_obj.is_seller == True
+    )
+    
+    if not is_seller:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden"
+        )
+    
+    return current_user_obj
+
+def require_approved_seller(
+    current_user_obj: User = Depends(get_current_user_obj)
+) -> User:
+    """
+    Role guard: Only allows sellers with is_approved == True.
+    Admins have full access to all endpoints, including seller endpoints.
+    Returns 403 Forbidden if user is not a seller (or admin) or not approved.
+    """
+    # Admins have full access to everything
+    if current_user_obj.is_admin:
+        return current_user_obj
+    
+    # Check if user is a seller (either by role or is_seller flag)
+    is_seller = (
+        current_user_obj.role == "seller" or 
+        current_user_obj.is_seller == True
+    )
+    
+    if not is_seller:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden"
+        )
+    
+    if not current_user_obj.is_approved:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seller account pending admin approval"
+        )
+    
+    return current_user_obj
+
+def require_customer(
+    current_user_obj: User = Depends(get_current_user_obj)
+) -> User:
+    """
+    Role guard: Only allows users who are NOT sellers AND NOT admins.
+    Admins have full access to all endpoints, including customer endpoints.
+    Returns 403 Forbidden if user is a seller (and not admin).
+    """
+    # Admins have full access to everything
+    if current_user_obj.is_admin:
+        return current_user_obj
+    
+    if current_user_obj.is_seller:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden"
+        )
+    return current_user_obj
+
 # ==================== VALIDATION FUNCTIONS ====================
 
 def validate_username(username: str) -> None:

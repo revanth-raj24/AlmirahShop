@@ -70,6 +70,9 @@ class Product(BaseModel):
     average_rating: float | None = None  # Computed field
     total_reviews: int | None = None  # Computed field
     product_variants: List["VariantResponse"] = []  # New variant system
+    stock: int | None = None  # Stock quantity for products without variants
+    low_stock_threshold: int | None = None  # Threshold for low stock alerts
+    status: str | None = None  # "IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"
 
     class Config:
         from_attributes = True
@@ -555,6 +558,52 @@ class VariantResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# Inventory Management Schemas
+class StockUpdateRequest(BaseModel):
+    """Request to update product stock"""
+    stock: int
+    low_stock_threshold: int | None = None
+
+class VariantStockUpdateRequest(BaseModel):
+    """Request to update variant stock"""
+    variant_id: int
+    stock: int
+
+class InventoryItemResponse(BaseModel):
+    """Inventory item with stock information"""
+    id: int
+    name: str
+    image_url: str | None = None
+    price: float
+    stock: int
+    low_stock_threshold: int
+    status: str
+    category: str | None = None
+    gender: str | None = None
+    variants: List["VariantResponse"] = []
+    total_stock: int  # Sum of product stock + all variant stocks
+    seller_id: int | None = None  # Seller ID for admin view
+
+    class Config:
+        from_attributes = True
+
+class InventoryListResponse(BaseModel):
+    """Paginated inventory list"""
+    items: List[InventoryItemResponse]
+    total: int
+    page: int
+    page_size: int
+
+class StockInfoResponse(BaseModel):
+    """Stock information for a product"""
+    product_id: int
+    stock: int
+    status: str
+    low_stock_threshold: int
+    variants: List[Dict[str, Any]] = []  # List of variants with stock info
+
+    class Config:
+        from_attributes = True
 # Payment Schemas
 class PaymentCreateRequest(BaseModel):
     amount: float
