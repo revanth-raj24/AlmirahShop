@@ -130,7 +130,7 @@ export default function SellerOrderDetail() {
                     )}
                     <div>
                       <span className="text-sm text-neutral-600">Price:</span>
-                      <div className="font-medium">${item.price.toFixed(2)} each</div>
+                      <div className="font-medium">₹{item.price.toFixed(2)} each</div>
                     </div>
                     <div>
                       <span className="text-sm text-neutral-600">Quantity:</span>
@@ -138,7 +138,7 @@ export default function SellerOrderDetail() {
                     </div>
                     <div>
                       <span className="text-sm text-neutral-600">Total:</span>
-                      <div className="font-medium text-lg">${(item.price * item.quantity).toFixed(2)}</div>
+                      <div className="font-medium text-lg">₹{(item.price * item.quantity).toFixed(2)}</div>
                     </div>
                   </div>
                 </>

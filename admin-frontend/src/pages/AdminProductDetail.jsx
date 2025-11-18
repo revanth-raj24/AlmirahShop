@@ -685,7 +685,7 @@ export default function AdminProductDetail() {
                           {variant.color || 'N/A'}
                         </td>
                         <td className="px-4 py-3 text-sm text-neutral-900">
-                          {variant.price ? `$${variant.price.toFixed(2)}` : `$${product.price.toFixed(2)}`}
+                          {variant.price ? `₹${variant.price.toFixed(2)}` : `₹${product.price.toFixed(2)}`}
                         </td>
                         <td className="px-4 py-3 text-sm text-neutral-900">
                           {variant.stock}

@@ -24,15 +24,15 @@ export default function VideoProductCard({ product }) {
             {product.discounted_price && product.discounted_price < product.price ? (
               <>
                 <span className="font-sans text-neutral-50 font-medium">
-                  ${product.discounted_price.toFixed(2)}
+                  ₹{product.discounted_price.toFixed(2)}
                 </span>
                 <span className="font-sans text-neutral-50/60 line-through text-sm">
-                  ${product.price.toFixed(2)}
+                  ₹{product.price.toFixed(2)}
                 </span>
-              </>
+              </> 
             ) : (
               <span className="font-sans text-neutral-50 font-medium">
-                ${product.price.toFixed(2)}
+                ₹{product.price.toFixed(2)}
               </span>
             )}
           </div>

@@ -44,6 +44,8 @@ export default function SellerDashboard() {
       return;
     }
     fetchData();
+    // Always fetch navigation counts regardless of active tab
+    fetchNavigationCounts();
   }, [user, activeTab, navigate]);
 
   // Cleanup object URLs on unmount
@@ -56,6 +58,24 @@ export default function SellerDashboard() {
       });
     };
   }, []);
+
+  // Fetch counts for navigation bar - always called regardless of active tab
+  const fetchNavigationCounts = async () => {
+    try {
+      // Fetch all counts concurrently
+      const [productsRes, ordersRes] = await Promise.all([
+        API.get('/seller/products').catch(() => ({ data: [] })),
+        API.get('/seller/orders').catch(() => ({ data: { items: [] } }))
+      ]);
+
+      setProducts(productsRes.data || []);
+      // New endpoint returns paginated response with items array
+      setOrders(ordersRes.data?.items || []);
+    } catch (err) {
+      console.error('Error fetching navigation counts:', err);
+      // Don't show alerts for navigation count errors, just log them
+    }
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -236,6 +256,7 @@ export default function SellerDashboard() {
       setEditingProduct(null);
       resetForm();
       fetchData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to save product');
     } finally {
@@ -273,6 +294,7 @@ export default function SellerDashboard() {
       setShowBulkForm(false);
       setBulkData('');
       fetchData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to create products');
     }
@@ -284,6 +306,7 @@ export default function SellerDashboard() {
     try {
       await API.delete(`/seller/products/delete/${productId}`);
       fetchData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to delete product');
     }
@@ -445,7 +468,7 @@ export default function SellerDashboard() {
             </div>
             <div className="bg-white border border-neutral-300 p-6">
               <h3 className="text-sm font-medium text-neutral-600 mb-2">Total Revenue</h3>
-              <p className="text-3xl font-bold text-neutral-900">${stats.total_revenue.toFixed(2)}</p>
+              <p className="text-3xl font-bold text-neutral-900">₹{stats.total_revenue.toFixed(2)}</p>
             </div>
           </div>
         )}
@@ -693,7 +716,7 @@ export default function SellerDashboard() {
                     )}
                   </div>
                   <h3 className="font-serif text-lg mb-2">{product.name}</h3>
-                  <p className="text-sm text-neutral-600 mb-2">${product.price}</p>
+                  <p className="text-sm text-neutral-600 mb-2">₹{product.price}</p>
                   <div className="flex flex-col gap-2 mb-4">
                     <span className={`px-2 py-1 text-xs rounded w-fit ${
                       product.verification_status === 'Approved'
@@ -788,7 +811,7 @@ export default function SellerDashboard() {
                             <div className="text-xs text-neutral-500">{item.customer_email || ''}</div>
                           </td>
                           <td className="px-6 py-4 text-sm font-medium text-neutral-900">
-                            ${(item.price * item.quantity).toFixed(2)}
+                            ₹{(item.price * item.quantity).toFixed(2)}
                           </td>
                           <td className="px-6 py-4">
                             <span className={`px-2 py-1 text-xs rounded ${

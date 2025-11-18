@@ -212,7 +212,7 @@ export default function Orders() {
                 <div className="text-right ml-4">
                   <p className="text-neutral-600 text-sm mb-1">Order Total</p>
                   <p className="font-sans text-2xl text-neutral-900 font-medium">
-                    ${parseFloat(order.total_price).toFixed(2)}
+                    ₹{parseFloat(order.total_price).toFixed(2)}
                   </p>
                 </div>
               </div>
@@ -256,7 +256,7 @@ export default function Orders() {
                         <h3 className="font-serif text-lg text-neutral-900 mb-1">{p.name || 'Product'}</h3>
                         <p className="text-neutral-600 text-sm mb-2">Quantity: {item.quantity}</p>
                         <p className="font-sans text-neutral-900 mb-2">
-                          ${parseFloat(item.price).toFixed(2)} each
+                          ₹{parseFloat(item.price).toFixed(2)} each
                         </p>
                         {/* Seller Name */}
                         {p.seller_username && (
@@ -277,7 +277,7 @@ export default function Orders() {
                       <div className="text-right flex flex-col justify-between">
                         <div>
                           <p className="font-sans text-neutral-900 font-medium mb-2">
-                            ${(parseFloat(item.price) * item.quantity).toFixed(2)}
+                            ₹{(parseFloat(item.price) * item.quantity).toFixed(2)}
                           </p>
                         </div>
                         <div className="flex flex-col gap-2">

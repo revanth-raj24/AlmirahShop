@@ -171,7 +171,7 @@ export default function SellerOrders() {
                       </td>
                       <td className="px-4 py-3 text-sm text-neutral-900">{item.quantity}</td>
                       <td className="px-4 py-3 text-sm text-neutral-900">
-                        ${(item.price * item.quantity).toFixed(2)}
+                        ₹{(item.price * item.quantity).toFixed(2)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-1 text-xs rounded ${getStatusColor(item.status)}`}>

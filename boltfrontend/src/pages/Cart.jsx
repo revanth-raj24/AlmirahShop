@@ -357,11 +357,11 @@ export default function Cart() {
                       <div className="flex items-center gap-2 mb-4">
                         {product.discounted_price && product.discounted_price < product.price ? (
                           <>
-                            <span className="text-lg font-medium text-neutral-900">${itemPrice.toFixed(2)}</span>
-                            <span className="text-sm text-neutral-500 line-through">${product.price.toFixed(2)}</span>
-                          </>
+                            <span className="text-lg font-medium text-neutral-900">₹{itemPrice.toFixed(2)}</span>
+                            <span className="text-sm text-neutral-500 line-through">₹{product.price.toFixed(2)}</span>
+                          </> 
                         ) : (
-                          <span className="text-lg font-medium text-neutral-900">${itemPrice.toFixed(2)}</span>
+                          <span className="text-lg font-medium text-neutral-900">₹{itemPrice.toFixed(2)}</span>
                         )}
                       </div>
                     </div>
@@ -389,7 +389,7 @@ export default function Cart() {
 
                       <div className="flex items-center gap-6">
                         <span className="font-sans text-neutral-900 font-semibold text-lg">
-                          ${itemTotal.toFixed(2)}
+                          ₹{itemTotal.toFixed(2)}
                         </span>
                         <button
                           onClick={() => removeItem(item.product_id)}
@@ -542,16 +542,16 @@ export default function Cart() {
               <div className="space-y-4 mb-6">
                 <div className="flex justify-between text-neutral-600">
                   <span>Subtotal ({detailedItems.length} {detailedItems.length === 1 ? 'item' : 'items'})</span>
-                  <span className="font-medium">${subtotal.toFixed(2)}</span>
+                  <span className="font-medium">₹{subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-neutral-600">
                   <span>Tax (10%)</span>
-                  <span className="font-medium">${tax.toFixed(2)}</span>
+                  <span className="font-medium">₹{tax.toFixed(2)}</span>
                 </div>
                 <div className="border-t border-neutral-300/20 pt-4">
                   <div className="flex justify-between font-sans font-semibold text-neutral-900 text-xl">
                     <span>Total</span>
-                    <span>${total.toFixed(2)}</span>
+                    <span>₹{total.toFixed(2)}</span>
                   </div>
                 </div>
               </div>

@@ -4,7 +4,7 @@ import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Users, Search, Filter, Eye, Trash2, UserCheck, ShoppingBag,
-  CheckCircle, XCircle, AlertCircle
+  CheckCircle, XCircle, AlertCircle, ArrowLeft
 } from 'lucide-react';
 
 export default function UsersList() {
@@ -94,9 +94,18 @@ export default function UsersList() {
     <div className="min-h-screen bg-neutral-50 py-8 px-4">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="font-serif text-4xl text-neutral-900 mb-2">User Management</h1>
-          <p className="text-neutral-600">Manage all customers and sellers</p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="font-serif text-4xl text-neutral-900 mb-2">User Management</h1>
+            <p className="text-neutral-600">Manage all customers and sellers</p>
+          </div>
+          <button
+            onClick={() => navigate('/admin/dashboard')}
+            className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </button>
         </div>
 
         {/* Search and Filter */}

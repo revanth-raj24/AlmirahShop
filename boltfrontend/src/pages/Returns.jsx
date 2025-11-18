@@ -153,7 +153,7 @@ export default function Returns() {
                   <div className="text-right">
                     <p className="text-neutral-600 text-sm mb-1">Item Value</p>
                     <p className="font-sans text-2xl text-neutral-900 font-medium">
-                      ${(parseFloat(returnItem.price) * returnItem.quantity).toFixed(2)}
+                      ₹{(parseFloat(returnItem.price) * returnItem.quantity).toFixed(2)}
                     </p>
                   </div>
                 </div>
@@ -170,7 +170,7 @@ export default function Returns() {
                     <h3 className="font-serif text-lg text-neutral-900 mb-1">{product.name || 'Product'}</h3>
                     <p className="text-neutral-600 text-sm mb-2">Quantity: {returnItem.quantity}</p>
                     <p className="font-sans text-neutral-900">
-                      ${parseFloat(returnItem.price).toFixed(2)} each
+                      ₹{parseFloat(returnItem.price).toFixed(2)} each
                     </p>
                   </div>
                 </div>

@@ -205,7 +205,7 @@ export default function AdminDashboard() {
             </div>
             <div className="bg-white border border-neutral-300 p-6">
               <h3 className="text-sm font-medium text-neutral-600 mb-2">Total Revenue</h3>
-              <p className="text-3xl font-bold text-neutral-900">${stats.total_revenue.toFixed(2)}</p>
+              <p className="text-3xl font-bold text-neutral-900">₹{stats.total_revenue.toFixed(2)}</p>
             </div>
           </div>
         )}
@@ -317,10 +317,10 @@ export default function AdminDashboard() {
                 <p className="text-sm text-neutral-600 mb-2 line-clamp-2">{product.description}</p>
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-lg font-medium text-neutral-900">${product.price}</p>
+                    <p className="text-lg font-medium text-neutral-900">₹{product.price}</p>
                     {product.discounted_price && (
                       <p className="text-sm text-neutral-600 line-through">
-                        ${product.discounted_price}
+                        ₹{product.discounted_price}
                       </p>
                     )}
                   </div>
@@ -368,7 +368,7 @@ export default function AdminDashboard() {
                     <tr key={order.id} className="hover:bg-neutral-50">
                       <td className="px-6 py-4 text-sm text-neutral-600">#{order.id}</td>
                       <td className="px-6 py-4 text-sm text-neutral-600">{order.user_id}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">${order.total_price.toFixed(2)}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">₹{order.total_price.toFixed(2)}</td>
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 text-xs rounded ${
                           order.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :

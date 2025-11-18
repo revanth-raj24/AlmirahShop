@@ -87,14 +87,14 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
             hasDiscount ? (
               <>
                 <span className="font-sans text-neutral-900 font-medium">
-                  ${product.discounted_price.toFixed(2)}
+                  ₹{product.discounted_price.toFixed(2)}
                 </span>
                 <span className="font-sans text-neutral-600 line-through text-sm">
-                  ${product.price.toFixed(2)}
+                  ₹{product.price.toFixed(2)}
                 </span>
-              </>
+              </> 
             ) : (
-              <span className="font-sans text-neutral-900 font-medium">${product.price.toFixed(2)}</span>
+              <span className="font-sans text-neutral-900 font-medium">₹{product.price.toFixed(2)}</span>
             )
           ) : (
             <span className="font-sans text-neutral-900 font-medium">N/A</span>
