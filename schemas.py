@@ -223,6 +223,11 @@ class OrderResponse(BaseModel):
     ship_state: Optional[str] = None
     ship_country: Optional[str] = None
     ship_pincode: Optional[str] = None
+    # Payment fields
+    payment_method: Optional[str] = None
+    payment_status: Optional[str] = None
+    payment_id: Optional[str] = None
+    payment_order_id: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -366,6 +371,10 @@ class SellerOrderItemResponse(BaseModel):
     # Customer info
     customer_username: Optional[str] = None
     customer_email: Optional[str] = None
+    # Payment info
+    order_payment_method: Optional[str] = None
+    order_payment_status: Optional[str] = None
+    order_payment_id: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -595,3 +604,20 @@ class StockInfoResponse(BaseModel):
 
     class Config:
         from_attributes = True
+# Payment Schemas
+class PaymentCreateRequest(BaseModel):
+    amount: float
+    currency: str = "INR"
+    order_id: int  # Our internal order ID
+    payment_method: str  # "UPI", "CARD", "NETBANKING", "WALLET"
+
+class PaymentCreateResponse(BaseModel):
+    razorpay_order_id: str
+    amount: float
+    currency: str
+    key_id: str
+    order_id: int  # Our internal order ID
+
+class PaymentWebhookRequest(BaseModel):
+    event: str
+    payload: dict

@@ -9,6 +9,8 @@ from database import Base, engine, SessionLocal
 from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant
 from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo, StockUpdateRequest, VariantStockUpdateRequest, InventoryItemResponse, InventoryListResponse, StockInfoResponse
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, require_admin, require_seller, require_approved_seller, require_customer, validate_username, validate_password_strength
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo, PaymentCreateRequest, PaymentCreateResponse
+from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, validate_username, validate_password_strength
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
@@ -17,11 +19,33 @@ import logging
 import os
 import json
 import uuid
+import hmac
+import hashlib
 from email_utils import generate_otp, send_otp_email, send_password_reset_email, send_password_reset_success_email
 from password_service import create_reset_token, validate_reset_token, invalidate_reset_token, check_rate_limit
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fastecom")
+
+# Load environment variables for Razorpay
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if env vars are set directly
+
+# Razorpay configuration
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+
+# Initialize Razorpay client
+try:
+    import razorpay
+    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET else None
+except ImportError:
+    razorpay_client = None
+    logger.warning("razorpay package not installed. Install with: pip install razorpay")
 
 TAGS_METADATA = [
     {"name": "Products", "description": "Manage products catalog."},
@@ -36,6 +60,7 @@ TAGS_METADATA = [
     {"name": "Seller Returns", "description": "Seller return management."},
     {"name": "Admin", "description": "Admin panel operations."},
     {"name": "Admin Returns", "description": "Admin return management."},
+    {"name": "Payments", "description": "Payment gateway operations."},
 ]
 
 app = FastAPI(
@@ -460,6 +485,38 @@ def migrate_user_fields():
     except Exception as e:
         logger.exception(f"User fields migration error: {e}")
         # Don't fail startup if migration fails
+def migrate_payment_fields():
+    """Safely add payment fields to orders table if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("PRAGMA table_info(orders)"))
+            columns = [row[1] for row in result]
+            
+            if "payment_method" not in columns:
+                logger.info("Adding payment_method column to orders table")
+                conn.execute(text("ALTER TABLE orders ADD COLUMN payment_method VARCHAR"))
+            
+            if "payment_status" not in columns:
+                logger.info("Adding payment_status column to orders table")
+                conn.execute(text("ALTER TABLE orders ADD COLUMN payment_status VARCHAR DEFAULT 'PENDING'"))
+                # Update existing orders to have PENDING_COD status (assuming they were COD)
+                conn.execute(text("UPDATE orders SET payment_status = 'PENDING_COD' WHERE payment_status IS NULL"))
+            
+            if "payment_id" not in columns:
+                logger.info("Adding payment_id column to orders table")
+                conn.execute(text("ALTER TABLE orders ADD COLUMN payment_id VARCHAR"))
+            
+            if "payment_order_id" not in columns:
+                logger.info("Adding payment_order_id column to orders table")
+                conn.execute(text("ALTER TABLE orders ADD COLUMN payment_order_id VARCHAR"))
+            
+            if "payment_signature" not in columns:
+                logger.info("Adding payment_signature column to orders table")
+                conn.execute(text("ALTER TABLE orders ADD COLUMN payment_signature VARCHAR"))
+            
+            logger.info("Payment fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Payment fields migration error: {e}")
 
 # Run migrations on startup
 migrate_user_fields()  # Run user migration first
@@ -471,6 +528,7 @@ migrate_reviews_table()
 migrate_product_variants_table()
 migrate_variant_id_fields()
 migrate_stock_fields()
+migrate_payment_fields()
 
 # Static file serving for uploads
 UPLOADS_DIR = "uploads"
@@ -1865,6 +1923,7 @@ def decrease_cart_item(
 @app.post("/orders/create", response_model=OrderResponse, tags=["Orders"])
 def create_order(
     address_id: int = Query(None, description="Address ID for delivery"),
+    payment_method: str = Query("COD", description="Payment method: COD or ONLINE"),
     db: Session = Depends(get_db), 
     current_user_obj: User = Depends(require_customer)
 ):
@@ -1917,12 +1976,25 @@ def create_order(
         "tag": address.tag
     }
 
+    # Validate payment method
+    payment_method_upper = payment_method.upper()
+    if payment_method_upper not in ["COD", "ONLINE"]:
+        raise HTTPException(status_code=400, detail="Invalid payment method. Use 'COD' or 'ONLINE'")
+    
+    # Set payment status based on payment method
+    if payment_method_upper == "COD":
+        payment_status = "PENDING_COD"
+        order_status = "Active"
+    else:  # ONLINE
+        payment_status = "PENDING"
+        order_status = "PENDING_PAYMENT"  # Order will be activated after payment confirmation
+    
     # create order with shipping snapshot
-    # Initial order status is "Active" (item-level statuses are primary)
+    # Initial order status depends on payment method
     order = Order(
         user_id=user.id, 
         total_price=0.0, 
-        status="Active",  # Simplified: Active until all items delivered or all rejected
+        status=order_status,
         delivery_address=address_snapshot,
         ship_name=address.full_name,
         ship_phone=address.phone_number,
@@ -1932,7 +2004,9 @@ def create_order(
         ship_state=address.state,
         ship_country=None,  # Not in Address model, can be added later
         ship_pincode=address.pincode,
-        ordered_at=datetime.utcnow()
+        ordered_at=datetime.utcnow(),
+        payment_method=payment_method_upper,
+        payment_status=payment_status
     )
     db.add(order)
     db.flush()  # assign PK to order.id before adding items
@@ -2018,6 +2092,148 @@ def create_order(
     order.order_items = order_items
     
     return order
+
+
+# ---------------- Payment Endpoints ----------------
+@app.post("/payments/create", response_model=PaymentCreateResponse, tags=["Payments"])
+def create_payment(
+    payment_data: PaymentCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """Create a Razorpay order for online payment"""
+    if not razorpay_client:
+        raise HTTPException(status_code=500, detail="Razorpay is not configured. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET")
+    
+    # Find user
+    user = db.query(User).filter(User.username == current_user).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify order belongs to user
+    order = db.query(Order).filter(Order.id == payment_data.order_id, Order.user_id == user.id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Verify order is pending payment
+    if order.payment_status != "PENDING":
+        raise HTTPException(status_code=400, detail=f"Order payment status is {order.payment_status}, cannot create payment")
+    
+    # Verify amount matches
+    amount_in_paise = int(payment_data.amount * 100)  # Razorpay expects amount in paise
+    if abs(order.total_price - payment_data.amount) > 0.01:  # Allow small floating point differences
+        raise HTTPException(status_code=400, detail=f"Amount mismatch. Order total: {order.total_price}, provided: {payment_data.amount}")
+    
+    try:
+        # Create Razorpay order
+        razorpay_order_data = {
+            "amount": amount_in_paise,
+            "currency": payment_data.currency,
+            "receipt": f"order_{order.id}",
+            "notes": {
+                "order_id": str(order.id),
+                "user_id": str(user.id),
+                "username": user.username
+            }
+        }
+        
+        razorpay_order = razorpay_client.order.create(data=razorpay_order_data)
+        
+        # Update order with Razorpay order ID
+        order.payment_order_id = razorpay_order["id"]
+        order.payment_method = payment_data.payment_method.upper()
+        db.commit()
+        
+        return PaymentCreateResponse(
+            razorpay_order_id=razorpay_order["id"],
+            amount=payment_data.amount,
+            currency=payment_data.currency,
+            key_id=RAZORPAY_KEY_ID,
+            order_id=order.id
+        )
+    except Exception as e:
+        logger.exception(f"Error creating Razorpay order: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create payment order: {str(e)}")
+
+
+@app.post("/payments/webhook", tags=["Payments"])
+async def payment_webhook(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Handle Razorpay webhook events"""
+    try:
+        # Get raw body for signature verification
+        body = await request.body()
+        signature = request.headers.get("X-Razorpay-Signature", "")
+        
+        # Verify webhook signature
+        if RAZORPAY_WEBHOOK_SECRET:
+            expected_signature = hmac.new(
+                RAZORPAY_WEBHOOK_SECRET.encode(),
+                body,
+                hashlib.sha256
+            ).hexdigest()
+            
+            if not hmac.compare_digest(signature, expected_signature):
+                logger.warning("Invalid webhook signature")
+                raise HTTPException(status_code=400, detail="Invalid signature")
+        
+        # Parse webhook data from body
+        webhook_data = json.loads(body.decode('utf-8'))
+        event = webhook_data.get("event")
+        payload = webhook_data.get("payload", {})
+        
+        logger.info(f"Received webhook event: {event}")
+        
+        # Handle payment.paid event
+        if event == "payment.captured" or event == "payment.authorized":
+            payment_entity = payload.get("payment", {}).get("entity", {})
+            payment_id = payment_entity.get("id")
+            razorpay_order_id = payment_entity.get("order_id")
+            payment_method = payment_entity.get("method", "").upper()
+            status = payment_entity.get("status", "")
+            
+            # Find order by Razorpay order ID
+            order = db.query(Order).filter(Order.payment_order_id == razorpay_order_id).first()
+            
+            if order:
+                if status == "captured" or status == "authorized":
+                    # Payment successful
+                    order.payment_status = "PAID"
+                    order.payment_id = payment_id
+                    order.payment_method = payment_method
+                    # Activate order if it was pending payment
+                    if order.status == "PENDING_PAYMENT":
+                        order.status = "Active"
+                    db.commit()
+                    logger.info(f"Payment successful for order {order.id}")
+                else:
+                    # Payment failed
+                    order.payment_status = "FAILED"
+                    db.commit()
+                    logger.warning(f"Payment failed for order {order.id}")
+            else:
+                logger.warning(f"Order not found for Razorpay order ID: {razorpay_order_id}")
+        
+        # Handle payment.failed event
+        elif event == "payment.failed":
+            payment_entity = payload.get("payment", {}).get("entity", {})
+            razorpay_order_id = payment_entity.get("order_id")
+            
+            order = db.query(Order).filter(Order.payment_order_id == razorpay_order_id).first()
+            if order:
+                order.payment_status = "FAILED"
+                db.commit()
+                logger.info(f"Payment failed for order {order.id}")
+        
+        return {"status": "success"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error processing webhook: {e}")
+        raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
 
 
 # ---------------- List User Orders ----------------
@@ -3260,7 +3476,10 @@ def get_seller_orders(
             order_ship_country=order.ship_country if order else None,
             order_ship_pincode=order.ship_pincode if order else None,
             customer_username=customer.username if customer else None,
-            customer_email=customer.email if customer else None
+            customer_email=customer.email if customer else None,
+            order_payment_method=order.payment_method if order else None,
+            order_payment_status=order.payment_status if order else None,
+            order_payment_id=order.payment_id if order else None
         ))
     
     return SellerOrderItemListResponse(
@@ -3311,7 +3530,10 @@ def get_seller_order_item(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 def update_order_status_from_items(order_id: int, db: Session):
@@ -3402,7 +3624,10 @@ def accept_order_item(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 @app.patch("/seller/orders/{order_item_id}/reject", response_model=SellerOrderItemResponse, tags=["Seller Orders"])
@@ -3463,7 +3688,10 @@ def reject_order_item(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 # ==================== SELLER RETURN ROUTES ====================
@@ -3589,7 +3817,10 @@ def get_seller_return(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 @app.patch("/seller/returns/{order_item_id}/accept", response_model=ReturnItemResponse, tags=["Seller Returns"])
@@ -3651,7 +3882,10 @@ def accept_return(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 @app.patch("/seller/returns/{order_item_id}/reject", response_model=ReturnItemResponse, tags=["Seller Returns"])
@@ -3715,7 +3949,10 @@ def reject_return(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 @app.patch("/seller/returns/{order_item_id}/mark-received", response_model=ReturnItemResponse, tags=["Seller Returns"])
@@ -3792,7 +4029,10 @@ def mark_return_received(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 # ==================== ADMIN ROUTES ====================
@@ -4258,7 +4498,10 @@ def admin_get_return(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 @app.patch("/admin/returns/{order_item_id}/override-status", response_model=ReturnItemResponse, tags=["Admin Returns"])
@@ -4324,7 +4567,10 @@ def admin_override_return_status(
         order_ship_country=order.ship_country if order else None,
         order_ship_pincode=order.ship_pincode if order else None,
         customer_username=customer.username if customer else None,
-        customer_email=customer.email if customer else None
+        customer_email=customer.email if customer else None,
+        order_payment_method=order.payment_method if order else None,
+        order_payment_status=order.payment_status if order else None,
+        order_payment_id=order.payment_id if order else None
     )
 
 # ==================== ADMIN ANALYTICS ENDPOINTS ====================

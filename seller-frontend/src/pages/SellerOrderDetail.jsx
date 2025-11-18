@@ -172,6 +172,33 @@ export default function SellerOrderDetail() {
                   <div className="font-medium">{item.customer_username || 'N/A'}</div>
                   <div className="text-sm text-neutral-600">{item.customer_email || ''}</div>
                 </div>
+                {/* Payment Information */}
+                {item.order_payment_method && (
+                  <div className="mt-4 pt-4 border-t border-neutral-200">
+                    <span className="text-sm text-neutral-600">Payment:</span>
+                    <div className="mt-2 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium capitalize">{item.order_payment_method}</span>
+                        {item.order_payment_status && (
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            item.order_payment_status === 'PAID' || item.order_payment_status === 'PENDING_COD'
+                              ? 'bg-green-100 text-green-700'
+                              : item.order_payment_status === 'FAILED'
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {item.order_payment_status.replace('_', ' ')}
+                          </span>
+                        )}
+                      </div>
+                      {item.order_payment_id && (
+                        <div className="text-xs text-neutral-500">
+                          Payment ID: {item.order_payment_id.substring(0, 12)}...
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

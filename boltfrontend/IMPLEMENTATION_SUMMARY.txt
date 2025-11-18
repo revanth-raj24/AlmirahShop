@@ -1,4 +1,4 @@
-ATELIER - eCommerce Implementation Summary
+AlmirahShop - eCommerce Implementation Summary
 ==========================================
 
 COMPLETED FEATURES:
@@ -75,6 +75,7 @@ npm run build (builds for production - tested successfully)
 
 NOTES:
 ------
+- ***The Project is still in development some features might not work**
 - All images from Pexels
 - Database fully populated with sample data
 - Coupon codes: WELCOME20, LUXURY50, FIRSTORDER

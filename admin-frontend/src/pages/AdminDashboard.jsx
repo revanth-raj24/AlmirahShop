@@ -1028,6 +1028,33 @@ export default function AdminDashboard() {
                           {new Date(orderDetails.created_at).toLocaleString()}
                         </p>
                       </div>
+                      {/* Payment Information */}
+                      {orderDetails.payment_method && (
+                        <>
+                          <div className="bg-neutral-50 p-4 rounded">
+                            <p className="text-sm text-neutral-600 mb-1">Payment Method</p>
+                            <p className="font-medium text-neutral-900 capitalize">{orderDetails.payment_method}</p>
+                          </div>
+                          <div className="bg-neutral-50 p-4 rounded">
+                            <p className="text-sm text-neutral-600 mb-1">Payment Status</p>
+                            <span className={`px-2 py-1 text-xs rounded inline-block ${
+                              orderDetails.payment_status === 'PAID' || orderDetails.payment_status === 'PENDING_COD'
+                                ? 'bg-green-100 text-green-700'
+                                : orderDetails.payment_status === 'FAILED'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {orderDetails.payment_status?.replace('_', ' ') || 'N/A'}
+                            </span>
+                          </div>
+                          {orderDetails.payment_id && (
+                            <div className="bg-neutral-50 p-4 rounded col-span-2">
+                              <p className="text-sm text-neutral-600 mb-1">Payment ID</p>
+                              <p className="font-medium text-neutral-900 text-xs">{orderDetails.payment_id}</p>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
 
                     {/* Delivery Address Section */}

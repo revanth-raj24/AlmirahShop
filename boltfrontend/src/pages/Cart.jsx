@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Trash2, Plus, Minus, ShoppingBag, X, MapPin, Home, Building2, Tag } from 'lucide-react';
+import { Trash2, Plus, Minus, ShoppingBag, X, MapPin, Home, Building2, Tag, CreditCard, Wallet } from 'lucide-react';
 import Button from '../components/Button';
 import { resolveImageUrl } from '../utils/imageUtils';
 
@@ -18,6 +18,8 @@ export default function Cart() {
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('COD'); // 'COD' or 'ONLINE'
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -25,6 +27,20 @@ export default function Cart() {
       return;
     }
     fetchAll();
+    
+    // Load Razorpay script
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+    
+    return () => {
+      // Cleanup script on unmount
+      const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+      if (existingScript) {
+        document.body.removeChild(existingScript);
+      }
+    };
   }, [user, location.pathname]);
 
   const fetchAll = async () => {
@@ -167,21 +183,89 @@ export default function Cart() {
       return;
     }
 
-    setCheckoutLoading(true);
-    try {
-      await API.post(`/orders/create?address_id=${selectedAddressId}`);
-      alert('Order placed successfully!');
-      navigate('/orders');
-    } catch (err) {
-      const errorMsg = err?.response?.data?.detail || 'Failed to place order. Please try again.';
-      if (errorMsg.includes('Address required')) {
-        alert('You must add a delivery address before placing an order.');
-        navigate('/setup-address?returnUrl=/cart');
-      } else {
+    // Handle COD payment
+    if (paymentMethod === 'COD') {
+      setCheckoutLoading(true);
+      try {
+        await API.post(`/orders/create?address_id=${selectedAddressId}&payment_method=COD`);
+        alert('Order placed successfully!');
+        navigate('/orders');
+      } catch (err) {
+        const errorMsg = err?.response?.data?.detail || 'Failed to place order. Please try again.';
+        if (errorMsg.includes('Address required')) {
+          alert('You must add a delivery address before placing an order.');
+          navigate('/setup-address?returnUrl=/cart');
+        } else {
+          alert(errorMsg);
+        }
+      } finally {
+        setCheckoutLoading(false);
+      }
+      return;
+    }
+
+    // Handle ONLINE payment with Razorpay
+    if (paymentMethod === 'ONLINE') {
+      setProcessingPayment(true);
+      try {
+        // Step 1: Create order with PENDING_PAYMENT status
+        const { data: order } = await API.post(`/orders/create?address_id=${selectedAddressId}&payment_method=ONLINE`);
+        
+        // Step 2: Create Razorpay payment order
+        const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
+        const { data: paymentData } = await API.post('/payments/create', {
+          amount: total,
+          currency: 'INR',
+          order_id: order.id,
+          payment_method: 'UPI' // Default, user can change in Razorpay popup
+        });
+
+        // Step 3: Open Razorpay checkout
+        if (window.Razorpay) {
+          const options = {
+            key: paymentData.key_id,
+            amount: paymentData.amount * 100, // Convert to paise
+            currency: paymentData.currency,
+            name: 'FastEcom',
+            description: `Order #${order.id}`,
+            order_id: paymentData.razorpay_order_id,
+            handler: async function (response) {
+              // Payment successful - show processing message
+              setProcessingPayment(false);
+              alert('Payment successful! Processing your order...');
+              
+              // Wait a moment for webhook to process, then redirect
+              setTimeout(() => {
+                navigate('/orders');
+              }, 2000);
+            },
+            prefill: {
+              name: selectedAddress?.full_name || userProfile?.username || '',
+              email: user?.email || '',
+              contact: selectedAddress?.phone_number || userProfile?.phone || ''
+            },
+            theme: {
+              color: '#000000'
+            },
+            modal: {
+              ondismiss: function() {
+                setProcessingPayment(false);
+                // Order is created but payment not completed
+                // User can retry payment from orders page
+              }
+            }
+          };
+
+          const razorpay = new window.Razorpay(options);
+          razorpay.open();
+        } else {
+          throw new Error('Razorpay SDK not loaded. Please refresh the page.');
+        }
+      } catch (err) {
+        setProcessingPayment(false);
+        const errorMsg = err?.response?.data?.detail || 'Failed to process payment. Please try again.';
         alert(errorMsg);
       }
-    } finally {
-      setCheckoutLoading(false);
     }
   };
 
@@ -399,6 +483,60 @@ export default function Cart() {
                 </div>
               )}
 
+              {/* Payment Method Selection */}
+              <div className="mb-6">
+                <h3 className="font-serif text-lg text-neutral-900 mb-4">Payment Method</h3>
+                <div className="space-y-3">
+                  <label
+                    className={`flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                      paymentMethod === 'COD'
+                        ? 'border-neutral-900 bg-neutral-50'
+                        : 'border-neutral-200 hover:border-neutral-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="payment"
+                      value="COD"
+                      checked={paymentMethod === 'COD'}
+                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      className="w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Wallet className="w-5 h-5" />
+                        <span className="font-medium text-neutral-900">Cash on Delivery</span>
+                      </div>
+                      <p className="text-sm text-neutral-600">Pay when you receive</p>
+                    </div>
+                  </label>
+                  
+                  <label
+                    className={`flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                      paymentMethod === 'ONLINE'
+                        ? 'border-neutral-900 bg-neutral-50'
+                        : 'border-neutral-200 hover:border-neutral-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="payment"
+                      value="ONLINE"
+                      checked={paymentMethod === 'ONLINE'}
+                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      className="w-4 h-4"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <CreditCard className="w-5 h-5" />
+                        <span className="font-medium text-neutral-900">Online Payment</span>
+                      </div>
+                      <p className="text-sm text-neutral-600">UPI, Card, Netbanking, Wallet</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               <h2 className="font-serif text-2xl text-neutral-900 mb-6">Order Summary</h2>
 
               <div className="space-y-4 mb-6">
@@ -420,10 +558,10 @@ export default function Cart() {
 
               <Button
                 onClick={handleCheckout}
-                disabled={checkoutLoading || detailedItems.length === 0}
+                disabled={checkoutLoading || processingPayment || detailedItems.length === 0}
                 className="w-full"
               >
-                {checkoutLoading ? 'Processing...' : 'Proceed to Checkout'}
+                {checkoutLoading ? 'Placing Order...' : processingPayment ? 'Processing Payment...' : 'Proceed to Checkout'}
               </Button>
 
               <button

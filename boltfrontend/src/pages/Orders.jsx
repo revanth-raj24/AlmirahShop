@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Package, Truck, CheckCircle, XCircle, RotateCcw } from 'lucide-react';
+import { Package, Truck, CheckCircle, XCircle, RotateCcw, CreditCard, Wallet } from 'lucide-react';
 import { resolveImageUrl } from '../utils/imageUtils';
 import { customerReturns } from '../services/returns';
 
@@ -162,22 +162,54 @@ export default function Orders() {
               className="bg-white border border-neutral-300/20 p-6 hover:border-neutral-300/40 transition-colors duration-300"
             >
               <div className="flex items-start justify-between mb-6 pb-6 border-b border-neutral-300/10">
-                <div>
+                <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
                     {getStatusIcon(order.status)}
                     <span className={`font-sans uppercase text-sm tracking-wider ${getStatusColor(order.status)}`}>
                       {order.status}
                     </span>
                   </div>
-                  <p className="text-neutral-600 text-sm">
+                  <p className="text-neutral-600 text-sm mb-2">
                     Order #{order.id} • Placed on {new Date(order.created_at).toLocaleDateString('en-US', {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric',
                     })}
                   </p>
+                  
+                  {/* Payment Information */}
+                  {order.payment_method && (
+                    <div className="flex items-center gap-4 mt-3 text-sm">
+                      <div className="flex items-center gap-2">
+                        {order.payment_method === 'COD' ? (
+                          <Wallet className="w-4 h-4 text-neutral-600" />
+                        ) : (
+                          <CreditCard className="w-4 h-4 text-neutral-600" />
+                        )}
+                        <span className="text-neutral-600">
+                          Payment: <span className="font-medium text-neutral-900 capitalize">{order.payment_method}</span>
+                        </span>
+                      </div>
+                      {order.payment_status && (
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          order.payment_status === 'PAID' || order.payment_status === 'PENDING_COD'
+                            ? 'bg-green-100 text-green-700'
+                            : order.payment_status === 'FAILED'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {order.payment_status.replace('_', ' ')}
+                        </span>
+                      )}
+                      {order.payment_id && (
+                        <span className="text-xs text-neutral-500">
+                          ID: {order.payment_id.substring(0, 12)}...
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="text-right">
+                <div className="text-right ml-4">
                   <p className="text-neutral-600 text-sm mb-1">Order Total</p>
                   <p className="font-sans text-2xl text-neutral-900 font-medium">
                     ₹{parseFloat(order.total_price).toFixed(2)}

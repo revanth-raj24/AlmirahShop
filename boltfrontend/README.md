@@ -1,6 +1,6 @@
 # The Almirah Shop
 
-A fully functional eCommerce web application with a minimalistic "old-money" aesthetic, built with modern web technologies.
+underconstruction eCommerce web application with a minimalistic "old-money" aesthetic, built with modern web technologies.
 
 ## Tech Stack
 

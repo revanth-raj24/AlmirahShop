@@ -116,6 +116,13 @@ class Order(Base):
     ship_country = Column(String, nullable=True)
     ship_pincode = Column(String, nullable=True)
     ordered_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Payment fields
+    payment_method = Column(String, nullable=True)  # "COD", "UPI", "CARD", "NETBANKING", "WALLET"
+    payment_status = Column(String, default="PENDING")  # "PENDING", "PAID", "FAILED", "PENDING_COD"
+    payment_id = Column(String, nullable=True)  # Razorpay payment ID
+    payment_order_id = Column(String, nullable=True)  # Razorpay order ID
+    payment_signature = Column(String, nullable=True)  # Razorpay signature
 
     user = relationship("User", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
