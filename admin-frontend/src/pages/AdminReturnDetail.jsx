@@ -163,9 +163,9 @@ export default function AdminReturnDetail() {
                 <div>
                   <h3 className="font-semibold text-neutral-900">{product.name || 'Product'}</h3>
                   <p className="text-sm text-neutral-600 mt-1">Quantity: {returnItem.quantity}</p>
-                  <p className="text-sm text-neutral-600">Price: ${parseFloat(returnItem.price).toFixed(2)} each</p>
+                  <p className="text-sm text-neutral-600">Price: ₹{parseFloat(returnItem.price).toFixed(2)} each</p>
                   <p className="text-sm font-semibold text-neutral-900 mt-2">
-                    Total: ${(parseFloat(returnItem.price) * returnItem.quantity).toFixed(2)}
+                    Total: ₹{(parseFloat(returnItem.price) * returnItem.quantity).toFixed(2)}
                   </p>
                 </div>
               </div>

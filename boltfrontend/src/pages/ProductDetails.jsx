@@ -275,11 +275,11 @@ export default function ProductDetails() {
           <div className="flex items-center gap-4 mb-4">
             {product.discounted_price && product.discounted_price < product.price ? (
               <>
-                <span className="text-2xl font-medium text-red-600">${product.discounted_price.toFixed(2)}</span>
-                <span className="text-lg line-through text-neutral-600">${product.price.toFixed(2)}</span>
-              </>
+                <span className="text-2xl font-medium text-red-600">₹{product.discounted_price.toFixed(2)}</span>
+                <span className="text-lg line-through text-neutral-600">₹{product.price.toFixed(2)}</span>
+              </> 
             ) : (
-              <span className="text-2xl font-medium text-neutral-900">${product.price.toFixed(2)}</span>
+              <span className="text-2xl font-medium text-neutral-900">₹{product.price.toFixed(2)}</span>
             )}
           </div>
 

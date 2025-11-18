@@ -241,7 +241,7 @@ export default function SellerDashboard() {
             </div>
             <div className="bg-white border border-neutral-300 p-6">
               <h3 className="text-sm font-medium text-neutral-600 mb-2">Total Revenue</h3>
-              <p className="text-3xl font-bold text-neutral-900">${stats.total_revenue.toFixed(2)}</p>
+              <p className="text-3xl font-bold text-neutral-900">₹{stats.total_revenue.toFixed(2)}</p>
             </div>
           </div>
         )}
@@ -411,7 +411,7 @@ export default function SellerDashboard() {
                     )}
                   </div>
                   <h3 className="font-serif text-lg mb-2">{product.name}</h3>
-                  <p className="text-sm text-neutral-600 mb-2">${product.price}</p>
+                  <p className="text-sm text-neutral-600 mb-2">₹{product.price}</p>
                   <div className="flex items-center gap-2 mb-4">
                     <span className={`px-2 py-1 text-xs rounded ${
                       product.is_verified 
@@ -473,7 +473,7 @@ export default function SellerDashboard() {
                   {orders.map((order) => (
                     <tr key={order.id} className="hover:bg-neutral-50">
                       <td className="px-6 py-4 text-sm text-neutral-600">#{order.id}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">${order.total_price.toFixed(2)}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">₹{order.total_price.toFixed(2)}</td>
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 text-xs rounded ${
                           order.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :

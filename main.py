@@ -2396,13 +2396,20 @@ def create_seller_products_bulk(
                     errors.append(f"Product {idx + 1}: Valid price is required")
                     continue
 
+                # Normalize gender to lowercase for case-insensitive validation
+                normalized_gender = None
+                if item.gender:
+                    gender_lower = str(item.gender).strip().lower()
+                    if gender_lower in ['men', 'women', 'unisex']:
+                        normalized_gender = gender_lower
+                
                 product = ProductModel(
                     name=item.name.strip(),
                     description=item.description.strip() if item.description else None,
                     image_url=item.image_url.strip() if item.image_url else None,
                     price=float(item.price),
                     discounted_price=float(item.discounted_price) if item.discounted_price is not None else None,
-                    gender=item.gender if item.gender in ['men', 'women', 'unisex'] else None,
+                    gender=normalized_gender,
                     category=item.category.strip() if item.category else None,
                     seller_id=current_seller.id,
                     is_verified=False  # Requires admin verification

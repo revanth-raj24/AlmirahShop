@@ -21,7 +21,8 @@ class ProductBase(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def normalize_collections(cls, data):
-        """Convert None to empty collections for sizes, colors, and specifications before validation"""
+        """Convert None to empty collections for sizes, colors, and specifications before validation.
+        Also normalize gender to lowercase for case-insensitive validation."""
         if isinstance(data, dict):
             # Convert None to empty list for sizes
             if 'sizes' in data and data['sizes'] is None:
@@ -32,6 +33,15 @@ class ProductBase(BaseModel):
             # Convert None to empty dict for specifications
             if 'specifications' in data and data['specifications'] is None:
                 data['specifications'] = {}
+            # Normalize gender to lowercase for case-insensitive validation
+            if 'gender' in data and data['gender'] is not None:
+                gender_str = str(data['gender']).strip().lower()
+                if gender_str in ['men', 'women', 'unisex']:
+                    data['gender'] = gender_str
+                else:
+                    # If invalid, set to None instead of raising error immediately
+                    # This allows the Literal validator to handle it with a clearer message
+                    data['gender'] = gender_str
         return data
 
 class ProductCreate(ProductBase):
@@ -74,6 +84,18 @@ class ProductBulkUpdate(BaseModel):
     product_ids: List[int]
     gender: Literal['men','women','unisex'] | None = None
     category: str | None = None
+    
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_gender(cls, data):
+        """Normalize gender to lowercase for case-insensitive validation"""
+        if isinstance(data, dict) and 'gender' in data and data['gender'] is not None:
+            gender_str = str(data['gender']).strip().lower()
+            if gender_str in ['men', 'women', 'unisex']:
+                data['gender'] = gender_str
+            else:
+                data['gender'] = gender_str
+        return data
 
 # User-related schemas
 class UserCreate(BaseModel):
@@ -405,6 +427,18 @@ class ProductUpdate(BaseModel):
     discounted_price: Optional[float] = None
     gender: Optional[Literal['men','women','unisex']] = None
     category: Optional[str] = None
+    
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_gender(cls, data):
+        """Normalize gender to lowercase for case-insensitive validation"""
+        if isinstance(data, dict) and 'gender' in data and data['gender'] is not None:
+            gender_str = str(data['gender']).strip().lower()
+            if gender_str in ['men', 'women', 'unisex']:
+                data['gender'] = gender_str
+            else:
+                data['gender'] = gender_str
+        return data
 
 class RejectProductRequest(BaseModel):
     notes: Optional[str] = None

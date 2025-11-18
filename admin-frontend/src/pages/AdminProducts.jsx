@@ -198,11 +198,11 @@ export default function AdminProducts() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-medium text-neutral-900">
-                          ${product.price.toFixed(2)}
+                          ₹{product.price.toFixed(2)}
                         </div>
                         {product.discounted_price && (
                           <div className="text-xs text-neutral-500 line-through">
-                            ${product.discounted_price.toFixed(2)}
+                            ₹{product.discounted_price.toFixed(2)}
                           </div>
                         )}
                       </td>

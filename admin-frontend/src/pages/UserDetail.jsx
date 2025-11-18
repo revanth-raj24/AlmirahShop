@@ -268,7 +268,7 @@ export default function UserDetail() {
                         {new Date(order.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3 text-sm font-medium text-neutral-900">
-                        ${order.total_price.toFixed(2)}
+                        ₹{order.total_price.toFixed(2)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-1 text-xs rounded ${
@@ -326,7 +326,7 @@ export default function UserDetail() {
                         {new Date(returnOrder.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3 text-sm font-medium text-neutral-900">
-                        ${returnOrder.total_price.toFixed(2)}
+                        ₹{returnOrder.total_price.toFixed(2)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-1 text-xs rounded ${

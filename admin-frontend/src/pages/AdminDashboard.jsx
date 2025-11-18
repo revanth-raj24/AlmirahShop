@@ -77,8 +77,8 @@ function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) 
       <p className="text-3xl font-bold text-neutral-900">
         {typeof value === 'number' && value < 1000 ? (
           <AnimatedCounter value={value} />
-        ) : typeof value === 'string' && value.startsWith('$') ? (
-          `$${parseFloat(value.slice(1)).toLocaleString()}`
+        ) : typeof value === 'string' && value.startsWith('₹') ? (
+          `₹${parseFloat(value.slice(1)).toLocaleString()}`
         ) : (
           <AnimatedCounter value={value} />
         )}
@@ -167,16 +167,27 @@ export default function AdminDashboard() {
       return;
     }
     fetchAllData();
-    // Fetch users count for the button
-    fetchUsersCount();
+    // Always fetch navigation counts regardless of active tab
+    fetchNavigationCounts();
   }, [user, activeTab, navigate]);
 
-  const fetchUsersCount = async () => {
+  // Fetch counts for navigation bar - always called regardless of active tab
+  const fetchNavigationCounts = async () => {
     try {
-      const { data } = await API.get('/admin/users');
-      setUsersCount(data?.length || 0);
+      // Fetch all counts concurrently
+      const [usersRes, sellersRes, pendingProductsRes, ordersRes] = await Promise.all([
+        API.get('/admin/users').catch(() => ({ data: [] })),
+        API.get('/admin/sellers').catch(() => ({ data: [] })),
+        API.get('/admin/products/pending').catch(() => ({ data: [] })),
+        API.get('/admin/orders').catch(() => ({ data: [] }))
+      ]);
+
+      setUsersCount(usersRes.data?.length || 0);
+      setSellers(sellersRes.data || []);
+      setPendingProducts(pendingProductsRes.data || []);
+      setOrders(ordersRes.data || []);
     } catch (err) {
-      console.error('Error fetching users count:', err);
+      console.error('Error fetching navigation counts:', err);
     }
   };
 
@@ -238,6 +249,7 @@ export default function AdminDashboard() {
       await API.post(`/admin/sellers/approve/${userId}`);
       alert('Seller approved successfully');
       fetchAllData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to approve seller');
     }
@@ -249,6 +261,7 @@ export default function AdminDashboard() {
       await API.post(`/admin/sellers/reject/${userId}`);
       alert('Seller rejected');
       fetchAllData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to reject seller');
     }
@@ -259,6 +272,7 @@ export default function AdminDashboard() {
       await API.post(`/admin/products/verify/${productId}`);
       alert('Product verified successfully');
       fetchAllData();
+      fetchNavigationCounts(); // Refresh navigation counts
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to verify product');
     }
@@ -490,14 +504,14 @@ export default function AdminDashboard() {
                     />
                     <KPICard
                       title="Revenue"
-                      value={`$${kpis.revenue_total.toLocaleString()}`}
+                      value={`₹${kpis.revenue_total.toLocaleString()}`}
                       icon={DollarSign}
                       subtitle="Total revenue"
                       color="green"
                     />
                     <KPICard
                       title="Avg Order Value"
-                      value={`$${kpis.avg_order_value}`}
+                      value={`₹${kpis.avg_order_value}`}
                       icon={TrendingUp}
                       subtitle="Per order average"
                       color="purple"
@@ -614,7 +628,7 @@ export default function AdminDashboard() {
                         cy="50%"
                         labelLine={false}
                         label={({ category_name, revenue_contribution }) => 
-                          `${category_name}: $${revenue_contribution.toFixed(0)}`
+                          `${category_name}: ₹${revenue_contribution.toFixed(0)}`
                         }
                         outerRadius={100}
                         fill="#8884d8"
@@ -626,7 +640,7 @@ export default function AdminDashboard() {
                       </Pie>
                       <Tooltip 
                         contentStyle={{ backgroundColor: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px' }}
-                        formatter={(value) => `$${value.toFixed(2)}`}
+                        formatter={(value) => `₹${value.toFixed(2)}`}
                       />
                     </PieChart>
                   </ResponsiveContainer>
@@ -657,10 +671,10 @@ export default function AdminDashboard() {
                       height={100}
                     />
                     <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px' }}
-                      formatter={(value) => `$${value.toFixed(2)}`}
-                    />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px' }}
+                        formatter={(value) => `₹${value.toFixed(2)}`}
+                      />
                     <Bar dataKey="total_sales" fill="#3B82F6" name="Revenue" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -753,7 +767,7 @@ export default function AdminDashboard() {
                         {orders.slice(0, 5).map((order) => (
                           <tr key={order.id} className="hover:bg-neutral-50">
                             <td className="px-6 py-4 text-sm font-medium text-neutral-900">#{order.id}</td>
-                            <td className="px-6 py-4 text-sm text-neutral-900">${order.total_price.toFixed(2)}</td>
+                            <td className="px-6 py-4 text-sm text-neutral-900">₹{order.total_price.toFixed(2)}</td>
                             <td className="px-6 py-4">
                               <span className={`px-2 py-1 text-xs rounded ${
                                 order.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
@@ -890,7 +904,7 @@ export default function AdminDashboard() {
                     <tr key={order.id} className="hover:bg-neutral-50">
                       <td className="px-6 py-4 text-sm text-neutral-600">#{order.id}</td>
                       <td className="px-6 py-4 text-sm text-neutral-600">{order.user_id}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">${order.total_price.toFixed(2)}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-neutral-900">₹{order.total_price.toFixed(2)}</td>
                       <td className="px-6 py-4 text-sm text-neutral-600">
                         {order.delivery_address ? (
                           <div>
@@ -973,7 +987,7 @@ export default function AdminDashboard() {
                       </div>
                       <div className="bg-neutral-50 p-4 rounded">
                         <p className="text-sm text-neutral-600 mb-1">Total Price</p>
-                        <p className="font-medium text-neutral-900">${orderDetails.total_price.toFixed(2)}</p>
+                        <p className="font-medium text-neutral-900">₹{orderDetails.total_price.toFixed(2)}</p>
                       </div>
                       <div className="bg-neutral-50 p-4 rounded">
                         <p className="text-sm text-neutral-600 mb-1">Status</p>
@@ -1076,12 +1090,12 @@ export default function AdminDashboard() {
                                     </div>
                                     <div>
                                       <span className="text-neutral-600">Price per item: </span>
-                                      <span className="font-medium text-neutral-900">${item.price.toFixed(2)}</span>
+                                      <span className="font-medium text-neutral-900">₹{item.price.toFixed(2)}</span>
                                     </div>
                                     <div>
                                       <span className="text-neutral-600">Subtotal: </span>
                                       <span className="font-medium text-neutral-900">
-                                        ${(item.price * item.quantity).toFixed(2)}
+                                        ₹{(item.price * item.quantity).toFixed(2)}
                                       </span>
                                     </div>
                                   </div>
