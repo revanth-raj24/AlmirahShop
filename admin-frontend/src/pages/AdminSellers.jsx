@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Users, CheckCircle, XCircle, AlertCircle, Ban, Eye, Filter, Search, Mail, Phone, Calendar } from 'lucide-react';
@@ -8,12 +8,26 @@ import Button from '../components/Button';
 export default function AdminSellers() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sellers, setSellers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('');
+  // Initialize filter from URL query parameter on mount
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const filterParam = searchParams.get('filter');
+    return filterParam || '';
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [processing, setProcessing] = useState(null);
+
+  // Sync filter with URL when URL changes (e.g., from navigation)
+  useEffect(() => {
+    const filterParam = searchParams.get('filter') || '';
+    if (filterParam !== statusFilter) {
+      setStatusFilter(filterParam);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -213,7 +227,15 @@ export default function AdminSellers() {
               <span className="text-sm font-medium text-neutral-700">Status:</span>
               <select
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  // Update URL query parameter
+                  if (e.target.value) {
+                    setSearchParams({ filter: e.target.value });
+                  } else {
+                    setSearchParams({});
+                  }
+                }}
                 className="px-3 py-1.5 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
               >
                 <option value="">All</option>

@@ -30,6 +30,11 @@ class Product(Base):
     material_care = Column(Text, nullable=True)  # Material & Care description
     specifications = Column(Text, nullable=True)  # JSON object: {"Fabric": "Cotton", "Fit": "Regular"}
     
+    # Stock management fields
+    stock = Column(Integer, default=0, index=True)  # Stock quantity for products without variants
+    low_stock_threshold = Column(Integer, default=5)  # Threshold for low stock alerts
+    status = Column(String, default="IN_STOCK", index=True)  # "IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"
+    
     seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
@@ -54,6 +59,8 @@ class User(Base):
 
     # Roles
     is_admin = Column(Boolean, default=False)
+    is_seller = Column(Boolean, default=False)  # Boolean flag for seller role
+    is_verified = Column(Boolean, default=False)  # Verification status
     role = Column(String, default="customer", index=True)  # "customer", "seller", "admin"
     is_approved = Column(Boolean, default=False)  # For sellers: must be approved by admin
     

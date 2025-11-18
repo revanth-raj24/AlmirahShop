@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
 from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant
-from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo
-from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, validate_username, validate_password_strength
+from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo, StockUpdateRequest, VariantStockUpdateRequest, InventoryItemResponse, InventoryListResponse, StockInfoResponse
+from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, require_admin, require_seller, require_approved_seller, require_customer, validate_username, validate_password_strength
 from fastapi import Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
@@ -40,13 +40,85 @@ TAGS_METADATA = [
 
 app = FastAPI(
     title="FastEcom API",
-    description="Simple e-commerce API with auth, cart, and orders",
+    description="""
+    Simple e-commerce API with auth, cart, and orders.
+    
+    ## Role-Based Access Control
+    
+    - **Customers**: Can access cart, wishlist, orders, profile, and public product endpoints
+    - **Sellers**: Can access seller dashboard, product management, and inventory (must be approved)
+    - **Admins**: Can access all endpoints including admin panel, user management, and product verification
+    
+    ## Authentication
+    
+    Use the `/users/login` endpoint to get a JWT token. Include it in the Authorization header:
+    ```
+    Authorization: Bearer <your_token>
+    ```
+    
+    ## Security Notes
+    
+    - Customers cannot access seller/admin endpoints (403 Forbidden)
+    - Sellers cannot access admin endpoints (403 Forbidden)
+    - Unapproved sellers can login but cannot access seller dashboard
+    """,
     version="1.0.0",
     openapi_tags=TAGS_METADATA,
     docs_url=None,  # Disable default docs to use custom
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+# Custom OpenAPI schema with security requirements
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    from fastapi.openapi.utils import get_openapi
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    
+    # Add security scheme
+    openapi_schema["components"]["securitySchemes"] = {
+        "Bearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Enter JWT token. Token includes role information (customer/seller/admin)."
+        }
+    }
+    
+    # Add security requirements to protected endpoints
+    # This is informational - actual enforcement is done by dependencies
+    for path, path_item in openapi_schema.get("paths", {}).items():
+        for method, operation in path_item.items():
+            if method in ["get", "post", "put", "patch", "delete"]:
+                # Add security requirement based on path
+                if "/admin/" in path:
+                    operation["security"] = [{"Bearer": []}]
+                    operation["tags"] = operation.get("tags", []) + ["Admin Only"]
+                elif "/seller/" in path:
+                    operation["security"] = [{"Bearer": []}]
+                    operation["tags"] = operation.get("tags", []) + ["Seller Only"]
+                elif path in ["/cart", "/wishlist", "/orders", "/returns", "/profile"] or path.startswith(("/cart/", "/wishlist/", "/orders/", "/returns/", "/profile/")):
+                    operation["security"] = [{"Bearer": []}]
+                    operation["tags"] = operation.get("tags", []) + ["Customer Only"]
+                elif path == "/products" and method == "post":
+                    operation["security"] = [{"Bearer": []}]
+                    operation["tags"] = operation.get("tags", []) + ["Seller Only"]
+                elif "/products/" in path and method == "delete":
+                    operation["security"] = [{"Bearer": []}]
+                    operation["tags"] = operation.get("tags", []) + ["Admin Only"]
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # Custom Swagger UI with alternative CDN (using unpkg.com instead of jsdelivr)
 @app.get("/docs", include_in_schema=False)
@@ -60,6 +132,7 @@ async def custom_swagger_ui_html():
         swagger_ui_parameters={
             "persistAuthorization": True,
             "displayRequestDuration": True,
+            "filter": True,  # Enable filter box
         }
     )
 
@@ -300,7 +373,96 @@ def migrate_variant_id_fields():
     except Exception as e:
         logger.exception(f"Variant ID fields migration error: {e}")
 
+# Safe migration: Add stock fields to products table
+def migrate_stock_fields():
+    """Safely add stock, low_stock_threshold, and status columns to products table if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("PRAGMA table_info(products)"))
+            columns = [row[1] for row in result]
+            
+            if "stock" not in columns:
+                logger.info("Adding stock column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 0"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_products_stock ON products(stock)"))
+            
+            if "low_stock_threshold" not in columns:
+                logger.info("Adding low_stock_threshold column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5"))
+            
+            if "status" not in columns:
+                logger.info("Adding status column to products table")
+                conn.execute(text("ALTER TABLE products ADD COLUMN status VARCHAR DEFAULT 'IN_STOCK'"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_products_status ON products(status)"))
+                # Update existing products: set status based on stock
+                conn.execute(text("""
+                    UPDATE products 
+                    SET status = CASE 
+                        WHEN stock <= 0 THEN 'OUT_OF_STOCK'
+                        WHEN stock <= COALESCE(low_stock_threshold, 5) THEN 'LOW_STOCK'
+                        ELSE 'IN_STOCK'
+                    END
+                """))
+            
+            logger.info("Stock fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"Stock fields migration error: {e}")
+
+# Safe migration: Add user role and status columns if they don't exist
+def migrate_user_fields():
+    """Safely add role, is_seller, is_admin, is_verified, is_approved, has_address, gender, dob columns to users table if they don't exist"""
+    try:
+        with engine.begin() as conn:
+            # Check existing columns
+            result = conn.execute(text("PRAGMA table_info(users)"))
+            columns = {row[1]: row for row in result}
+            
+            # Define columns to add with their SQL definitions
+            columns_to_add = [
+                ("is_seller", "BOOLEAN DEFAULT 0"),
+                ("is_admin", "BOOLEAN DEFAULT 0"),
+                ("is_verified", "BOOLEAN DEFAULT 0"),
+                ("is_approved", "BOOLEAN DEFAULT 0"),
+                ("role", "TEXT DEFAULT 'customer'"),
+                ("has_address", "BOOLEAN DEFAULT 0"),
+                ("gender", "TEXT"),
+                ("dob", "TEXT"),
+            ]
+            
+            for col_name, col_def in columns_to_add:
+                if col_name not in columns:
+                    logger.info(f"Adding {col_name} column to users table")
+                    try:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
+                        logger.info(f"Successfully added {col_name} column")
+                    except Exception as e:
+                        logger.warning(f"Failed to add {col_name} column (may already exist): {e}")
+                else:
+                    logger.debug(f"Column {col_name} already exists, skipping")
+            
+            # Update role for existing users based on is_admin flag (if role doesn't exist)
+            # This is a one-time migration for existing data
+            try:
+                conn.execute(text("""
+                    UPDATE users 
+                    SET role = CASE 
+                        WHEN is_admin = 1 THEN 'admin'
+                        WHEN is_seller = 1 THEN 'seller'
+                        ELSE 'customer'
+                    END
+                    WHERE role IS NULL OR role = ''
+                """))
+                logger.info("Updated role for existing users based on flags")
+            except Exception as e:
+                logger.debug(f"Role update migration skipped (may not be needed): {e}")
+                
+            logger.info("User fields migration completed successfully")
+    except Exception as e:
+        logger.exception(f"User fields migration error: {e}")
+        # Don't fail startup if migration fails
+
 # Run migrations on startup
+migrate_user_fields()  # Run user migration first
 migrate_verification_fields()
 migrate_return_fields()
 migrate_product_detail_fields()
@@ -308,6 +470,7 @@ migrate_cart_item_fields()
 migrate_reviews_table()
 migrate_product_variants_table()
 migrate_variant_id_fields()
+migrate_stock_fields()
 
 # Static file serving for uploads
 UPLOADS_DIR = "uploads"
@@ -655,9 +818,14 @@ async def options_handler(request: Request, full_path: str):
         }
     )
 
-# Create Product
+# Create Product (SELLER ONLY - FIXED SECURITY BUG)
 @app.post("/products", response_model=ProductSchema, tags=["Products"])
-def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    product: ProductCreate, 
+    db: Session = Depends(get_db),
+    seller: User = Depends(require_approved_seller)
+):
+    """Create a new product. Only sellers can create products."""
     product_data = product.model_dump()
     # Serialize JSON fields
     if 'sizes' in product_data and product_data['sizes']:
@@ -668,6 +836,12 @@ def create_product(product: ProductCreate, db: Session = Depends(get_db)):
         product_data['variants'] = serialize_json_field(product_data['variants'])
     if 'specifications' in product_data and product_data['specifications']:
         product_data['specifications'] = serialize_json_field(product_data['specifications'])
+    
+    # Set seller_id to the authenticated seller
+    product_data['seller_id'] = seller.id
+    product_data['is_verified'] = False
+    product_data['verification_status'] = "Pending"
+    product_data['submitted_at'] = datetime.utcnow()
     
     new_product = ProductModel(**product_data)
     db.add(new_product)
@@ -819,6 +993,35 @@ def normalize_product_gender(product, db: Session = None):
         # Return product as-is if normalization fails (better than crashing)
         return product
 
+def update_product_status(product: ProductModel, db: Session):
+    """Update product status based on stock (for products without variants)"""
+    if not product:
+        return
+    
+    # Check if product has variants
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    
+    if variants:
+        # Product has variants - calculate total stock from variants
+        total_stock = sum(v.stock for v in variants if v.stock)
+        # Status is based on variant stocks
+        if total_stock <= 0:
+            product.status = "OUT_OF_STOCK"
+        elif total_stock <= (product.low_stock_threshold or 5):
+            product.status = "LOW_STOCK"
+        else:
+            product.status = "IN_STOCK"
+    else:
+        # Product without variants - use product stock
+        if product.stock <= 0:
+            product.status = "OUT_OF_STOCK"
+        elif product.stock <= (product.low_stock_threshold or 5):
+            product.status = "LOW_STOCK"
+        else:
+            product.status = "IN_STOCK"
+    
+    db.commit()
+
 
 @app.get("/products/paginated", response_model=ProductListResponse, tags=["Products"])
 def get_products_paginated(
@@ -961,9 +1164,9 @@ def create_product_review(
     product_id: int,
     review: ReviewCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    """Create a review for a product (authenticated users only)"""
+    """Create a review for a product (customers only)"""
     # Validate rating
     if review.rating < 1 or review.rating > 5:
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
@@ -973,10 +1176,8 @@ def create_product_review(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Find user
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Use authenticated customer
+    user = current_user_obj
     
     # Check if user already reviewed this product
     existing_review = db.query(Review).filter(
@@ -1057,7 +1258,12 @@ def get_similar_products(product_id: int, limit: int = Query(12, ge=1, le=20), d
 
 # Delete Product
 @app.delete("/products/{product_id}", tags=["Products"])
-def delete_product(product_id: int, db: Session = Depends(get_db)):
+def delete_product(
+    product_id: int, 
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin)
+):
+    """Delete a product (Admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -1187,46 +1393,66 @@ def login_user(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Account not activated. Please verify your email with the OTP sent to your inbox."
         )
-    access_token_expires = timedelta(minutes=30)
-    access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
-
-    # Determine user role
-    user_role = "customer"
-    if user.role == "admin" or user.is_admin:
+    
+    # Determine user role - prioritize explicit role field, then check boolean flags
+    # This ensures customers with role="customer" are always customers, even if flags are set
+    user_role = getattr(user, "role", "customer") or "customer"
+    
+    # Admin takes highest priority - if explicitly admin or is_admin flag is True
+    if user_role == "admin" or user.is_admin:
         user_role = "admin"
-    elif user.role == "seller":
+    # Seller only if role is explicitly "seller" OR (is_seller flag AND role is not "customer")
+    elif user_role == "seller" or (user.is_seller and user_role != "customer"):
         user_role = "seller"
-
-    # Include seller approval status when relevant so frontend can route correctly
-    is_approved = None
-    if user_role == "seller":
-        is_approved = bool(getattr(user, "is_approved", False))
-
-    return {
+    # Otherwise, ensure customer (explicit role="customer" or no role set)
+    else:
+        user_role = "customer"
+    
+    # Get approval status and flags (use actual values, not determined role)
+    is_approved = bool(getattr(user, "is_approved", False))
+    is_seller = bool(getattr(user, "is_seller", False))
+    is_admin = bool(getattr(user, "is_admin", False))
+    
+    # Create JWT token with role information
+    access_token_expires = timedelta(minutes=30)
+    token_data = {
+        "sub": user.username,
+        "role": user_role,
+        "is_seller": is_seller,
+        "is_admin": is_admin,
+        "is_approved": is_approved
+    }
+    access_token = create_access_token(data=token_data, expires_delta=access_token_expires)
+    
+    # Build base response with all required fields
+    response = {
         "access_token": access_token,
         "token_type": "bearer",
         "role": user_role,
         "username": user.username,
+        "is_seller": is_seller,
+        "is_admin": is_admin,
         "is_approved": is_approved
     }
+    
+    # Special handling for sellers who are not approved
+    if user_role == "seller" and not is_approved:
+        response["status"] = "pending"
+        response["message"] = "Your seller account is under verification by the admin."
+    
+    return response
 
 @app.get("/seller/status", tags=["Seller"])
 def get_seller_status(
     db: Session = Depends(get_db),
-    current_user_obj: User = Depends(get_current_user_obj)
+    current_user_obj: User = Depends(require_seller)
 ):
     """
     Helper endpoint for seller frontend to poll approval status.
 
     - Returns is_approved flag, username, and seller_id for authenticated sellers.
-    - Returns 403 for non-seller roles.
+    - Uses require_seller() to allow both approved and unapproved sellers.
     """
-    if current_user_obj.role != "seller":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seller access required"
-        )
-
     refreshed = db.query(User).filter(User.id == current_user_obj.id).first()
     if not refreshed:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1247,24 +1473,19 @@ def read_profile(current_user: str = Depends(get_current_user)):
 @app.get("/profile/me", response_model=ProfileResponse, tags=["Users"])
 def get_profile(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get current user's profile"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return current_user_obj
 
 @app.put("/profile/update", response_model=ProfileResponse, tags=["Users"])
 def update_profile(
     profile_update: ProfileUpdate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Update user profile (username, phone, gender, dob)"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     # Update only provided fields
     update_data = profile_update.model_dump(exclude_unset=True)
@@ -1311,12 +1532,10 @@ def update_profile(
 def change_password(
     password_data: ChangePasswordRequest,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Change user password with validation"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     # Verify old password
     if not verify_password(password_data.old_password, user.hashed_password):
@@ -1374,7 +1593,7 @@ def register_seller(seller: SellerCreate, db: Session = Depends(get_db)):
         expiry = datetime.utcnow() + timedelta(minutes=10)
         hashed_pw = hash_password(seller.password)
         
-        # Create seller user with role="seller" and is_approved=False
+        # Create seller user with role="seller", is_seller=True, and is_approved=False
         new_seller = User(
             username=seller.username, 
             email=seller.email, 
@@ -1384,6 +1603,7 @@ def register_seller(seller: SellerCreate, db: Session = Depends(get_db)):
             otp=otp,
             otp_expiry=expiry,
             role="seller",  # Seller role
+            is_seller=True,  # Boolean flag for seller role
             is_approved=False  # Must be approved by admin
         )
         db.add(new_seller)
@@ -1427,10 +1647,10 @@ def register_seller(seller: SellerCreate, db: Session = Depends(get_db)):
 def add_to_cart(
     item: CartItemCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    # Find user
-    user = db.query(User).filter(User.username == current_user).first()
+    # Use authenticated customer
+    user = current_user_obj
 
     # Check if product exists
     product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
@@ -1520,13 +1740,10 @@ def add_to_cart(
 @app.get("/cart", response_model=list[CartItemResponse], tags=["Cart"])
 def get_cart(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get user's cart with variant information"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    cart_items = db.query(CartItem).filter(CartItem.user_id == user.id).all()
+    cart_items = db.query(CartItem).filter(CartItem.user_id == current_user_obj.id).all()
     # Load variants for each cart item
     for item in cart_items:
         if item.variant_id:
@@ -1538,12 +1755,11 @@ def get_cart(
 def remove_from_cart(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
     cart_item = (
         db.query(CartItem)
-        .filter(CartItem.user_id == user.id, CartItem.product_id == product_id)
+        .filter(CartItem.user_id == current_user_obj.id, CartItem.product_id == product_id)
         .first()
     )
     if not cart_item:
@@ -1557,10 +1773,9 @@ def remove_from_cart(
 @app.delete("/cart/clear", tags=["Cart"])
 def clear_cart(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
-    db.query(CartItem).filter(CartItem.user_id == user.id).delete()
+    db.query(CartItem).filter(CartItem.user_id == current_user_obj.id).delete()
     db.commit()
     return {"message": "Cart cleared successfully"}
 
@@ -1570,12 +1785,11 @@ def clear_cart(
 def set_cart_item_quantity(
     update: CartItemQuantityUpdate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
     cart_item = (
         db.query(CartItem)
-        .filter(CartItem.user_id == user.id, CartItem.product_id == update.product_id)
+        .filter(CartItem.user_id == current_user_obj.id, CartItem.product_id == update.product_id)
         .first()
     )
 
@@ -1600,18 +1814,17 @@ def set_cart_item_quantity(
 def increase_cart_item(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
     cart_item = (
         db.query(CartItem)
-        .filter(CartItem.user_id == user.id, CartItem.product_id == product_id)
+        .filter(CartItem.user_id == current_user_obj.id, CartItem.product_id == product_id)
         .first()
     )
 
     if not cart_item:
         # If not present, add with quantity 1
-        cart_item = CartItem(user_id=user.id, product_id=product_id, quantity=1)
+        cart_item = CartItem(user_id=current_user_obj.id, product_id=product_id, quantity=1)
         db.add(cart_item)
     else:
         cart_item.quantity += 1
@@ -1626,12 +1839,11 @@ def increase_cart_item(
 def decrease_cart_item(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
     cart_item = (
         db.query(CartItem)
-        .filter(CartItem.user_id == user.id, CartItem.product_id == product_id)
+        .filter(CartItem.user_id == current_user_obj.id, CartItem.product_id == product_id)
         .first()
     )
 
@@ -1654,12 +1866,10 @@ def decrease_cart_item(
 def create_order(
     address_id: int = Query(None, description="Address ID for delivery"),
     db: Session = Depends(get_db), 
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    # find user record
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Use authenticated customer
+    user = current_user_obj
 
     # Validate address requirement
     if not user.has_address:
@@ -1749,6 +1959,28 @@ def create_order(
                 variant_size = variant.size
                 variant_color = variant.color
                 variant_image_url = variant.image_url
+                
+                # Check variant stock availability
+                if variant.stock < ci.quantity:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Insufficient stock for {product.name} (Size: {variant.size}, Color: {variant.color}). Available: {variant.stock}, Requested: {ci.quantity}"
+                    )
+                # Decrease variant stock
+                variant.stock -= ci.quantity
+                # Update product status
+                update_product_status(product, db)
+        else:
+            # Check product stock (for products without variants)
+            if product.stock < ci.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock for {product.name}. Available: {product.stock}, Requested: {ci.quantity}"
+                )
+            # Decrease product stock
+            product.stock -= ci.quantity
+            # Update product status
+            update_product_status(product, db)
 
         item_price = float(variant_price) * int(ci.quantity)
         total += item_price
@@ -1790,11 +2022,8 @@ def create_order(
 
 # ---------------- List User Orders ----------------
 @app.get("/orders", response_model=list[OrderResponse], tags=["Orders"])
-def list_orders(db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    orders = db.query(Order).filter(Order.user_id == user.id).order_by(Order.created_at.desc()).all()
+def list_orders(db: Session = Depends(get_db), current_user_obj: User = Depends(require_customer)):
+    orders = db.query(Order).filter(Order.user_id == current_user_obj.id).order_by(Order.created_at.desc()).all()
     # Load order items with product details and seller info
     for order in orders:
         order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
@@ -1818,12 +2047,8 @@ def list_orders(db: Session = Depends(get_db), current_user: str = Depends(get_c
 
 # ---------------- Get Order Details ----------------
 @app.get("/orders/{order_id}", response_model=OrderResponse, tags=["Orders"])
-def get_order(order_id: int, db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    order = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+def get_order(order_id: int, db: Session = Depends(get_db), current_user_obj: User = Depends(require_customer)):
+    order = db.query(Order).filter(Order.id == order_id, Order.user_id == current_user_obj.id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found or access denied")
 
@@ -1854,7 +2079,7 @@ def request_return(
     order_item_id: int,
     request_data: ReturnRequestCreate,
     db: Session = Depends(get_db),
-    current_user_obj: User = Depends(customer_only)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Customer requests a return for an order item"""
     # Get order item
@@ -1908,7 +2133,7 @@ def request_return(
 def cancel_return(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_user_obj: User = Depends(customer_only)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Customer cancels a return request"""
     order_item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
@@ -1946,7 +2171,7 @@ def cancel_return(
 @app.get("/returns/my", response_model=list[ReturnItemResponse], tags=["Returns"])
 def list_my_returns(
     db: Session = Depends(get_db),
-    current_user_obj: User = Depends(customer_only)
+    current_user_obj: User = Depends(require_customer)
 ):
     """List all return requests for current customer"""
     # Get all order items with return requests for this user
@@ -2006,7 +2231,11 @@ def list_my_returns(
     return result
 
 @app.post("/products/bulk", response_model=BulkProductCreateResponse, tags=["Products"])
-def create_multiple_products(payload: BulkProductCreate, db: Session = Depends(get_db)):
+def create_multiple_products(
+    payload: BulkProductCreate, 
+    db: Session = Depends(get_db),
+    seller: User = Depends(require_approved_seller)
+):
     if not payload.products or len(payload.products) == 0:
         raise HTTPException(status_code=400, detail="No products provided")
 
@@ -2035,6 +2264,10 @@ def create_multiple_products(payload: BulkProductCreate, db: Session = Depends(g
                     discounted_price=float(item.discounted_price) if item.discounted_price is not None else None,
                     gender=item.gender if item.gender in ['men', 'women', 'unisex'] else None,
                     category=item.category.strip() if item.category else None,
+                    seller_id=seller.id,
+                    is_verified=False,
+                    verification_status="Pending",
+                    submitted_at=datetime.utcnow()
                 )
                 db.add(product)
                 created_products.append(product)
@@ -2069,12 +2302,8 @@ def create_multiple_products(payload: BulkProductCreate, db: Session = Depends(g
 def add_to_wishlist(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
     # Check if product exists
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
     if not product:
@@ -2082,13 +2311,13 @@ def add_to_wishlist(
 
     # Check if already in wishlist
     existing = db.query(WishlistItem).filter(
-        WishlistItem.user_id == user.id,
+        WishlistItem.user_id == current_user_obj.id,
         WishlistItem.product_id == product_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Product already in wishlist")
 
-    wishlist_item = WishlistItem(user_id=user.id, product_id=product_id)
+    wishlist_item = WishlistItem(user_id=current_user_obj.id, product_id=product_id)
     db.add(wishlist_item)
     db.commit()
     db.refresh(wishlist_item)
@@ -2098,14 +2327,10 @@ def add_to_wishlist(
 def remove_from_wishlist(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
     wishlist_item = db.query(WishlistItem).filter(
-        WishlistItem.user_id == user.id,
+        WishlistItem.user_id == current_user_obj.id,
         WishlistItem.product_id == product_id
     ).first()
 
@@ -2119,25 +2344,18 @@ def remove_from_wishlist(
 @app.get("/wishlist", response_model=list[WishlistItemResponse], tags=["Wishlist"])
 def get_wishlist(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return db.query(WishlistItem).filter(WishlistItem.user_id == user.id).all()
+    return db.query(WishlistItem).filter(WishlistItem.user_id == current_user_obj.id).all()
 
 @app.get("/wishlist/check/{product_id}", response_model=dict, tags=["Wishlist"])
 def check_wishlist_status(
     product_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
     exists = db.query(WishlistItem).filter(
-        WishlistItem.user_id == user.id,
+        WishlistItem.user_id == current_user_obj.id,
         WishlistItem.product_id == product_id
     ).first() is not None
 
@@ -2196,7 +2414,7 @@ def verify_otp(data: VerifyOTPRequest, db: Session = Depends(get_db)):
 @app.post("/seller/upload", tags=["Seller"])
 async def upload_images(
     files: list[UploadFile] = File(...),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Upload one or more product images (seller only)"""
     if not files or len(files) == 0:
@@ -2238,7 +2456,7 @@ async def upload_images(
 @app.get("/seller/products", response_model=list[ProductSchema], tags=["Seller"])
 def get_seller_products(
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get all products for the current seller"""
     products = db.query(ProductModel).filter(
@@ -2250,7 +2468,7 @@ def get_seller_products(
 def create_seller_product(
     product: ProductCreate,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Create a new product (seller only)"""
     try:
@@ -2374,7 +2592,7 @@ def create_seller_product(
 def create_seller_products_bulk(
     payload: BulkProductCreate,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Create multiple products at once (seller only)"""
     if not payload.products or len(payload.products) == 0:
@@ -2447,7 +2665,7 @@ def update_seller_product(
     product_id: int,
     product: ProductCreate,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Update a product (seller only, only their own products)"""
     try:
@@ -2546,7 +2764,7 @@ def create_product_variant(
     product_id: int,
     variant: VariantCreate,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Create a variant for a product (seller only, only their own products)"""
     product = db.query(ProductModel).filter(
@@ -2577,7 +2795,7 @@ def create_product_variant(
 def get_product_variants(
     product_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get all variants for a product (seller only, only their own products)"""
     product = db.query(ProductModel).filter(
@@ -2600,7 +2818,7 @@ def update_product_variant(
     variant_id: int,
     variant: VariantUpdate,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Update a variant (seller only, only their own products)"""
     existing_variant = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
@@ -2632,7 +2850,7 @@ def update_product_variant(
 def delete_product_variant(
     variant_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Delete a variant (seller only, only their own products)"""
     variant = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
@@ -2655,7 +2873,7 @@ def delete_product_variant(
 def delete_seller_product(
     product_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Delete a product (seller only, only their own products)"""
     product = db.query(ProductModel).filter(
@@ -2673,10 +2891,246 @@ def delete_seller_product(
     db.commit()
     return {"message": "Product deleted successfully"}
 
+# ==================== SELLER INVENTORY ROUTES ====================
+
+@app.get("/seller/inventory", response_model=InventoryListResponse, tags=["Seller"])
+def get_seller_inventory(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(require_approved_seller)
+):
+    """Get inventory list for seller (paginated)"""
+    base_query = db.query(ProductModel).filter(ProductModel.seller_id == current_seller.id)
+    total = base_query.count()
+    offset = (page - 1) * page_size
+    products = base_query.order_by(ProductModel.id.desc()).limit(page_size).offset(offset).all()
+    
+    items = []
+    for product in products:
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        # Calculate total stock
+        variant_stock = sum(v.stock for v in variants if v.stock)
+        total_stock = product.stock + variant_stock
+        
+        # Normalize variants
+        variant_responses = []
+        for v in variants:
+            variant_responses.append(VariantResponse(
+                id=v.id,
+                product_id=v.product_id,
+                size=v.size,
+                color=v.color,
+                image_url=normalize_image_url(v.image_url) if v.image_url else None,
+                price=v.price,
+                stock=v.stock,
+                created_at=v.created_at,
+                updated_at=v.updated_at
+            ))
+        
+        items.append(InventoryItemResponse(
+            id=product.id,
+            name=product.name,
+            image_url=normalize_image_url(product.image_url) if product.image_url else None,
+            price=product.price,
+            stock=product.stock,
+            low_stock_threshold=product.low_stock_threshold or 5,
+            status=product.status or "IN_STOCK",
+            category=product.category,
+            gender=product.gender,
+            variants=variant_responses,
+            total_stock=total_stock,
+            seller_id=product.seller_id
+        ))
+    
+    return InventoryListResponse(items=items, total=total, page=page, page_size=page_size)
+
+@app.post("/seller/inventory/update/{product_id}", response_model=InventoryItemResponse, tags=["Seller"])
+def update_product_stock(
+    product_id: int,
+    request: StockUpdateRequest,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(require_approved_seller)
+):
+    """Update product stock (seller only, only their own products)"""
+    product = db.query(ProductModel).filter(
+        ProductModel.id == product_id,
+        ProductModel.seller_id == current_seller.id
+    ).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found or access denied")
+    
+    # Update stock
+    product.stock = request.stock
+    if request.low_stock_threshold is not None:
+        product.low_stock_threshold = request.low_stock_threshold
+    
+    # Update status
+    update_product_status(product, db)
+    db.refresh(product)
+    
+    # Get variants for response
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    variant_stock = sum(v.stock for v in variants if v.stock)
+    total_stock = product.stock + variant_stock
+    
+    variant_responses = []
+    for v in variants:
+        variant_responses.append(VariantResponse(
+            id=v.id,
+            product_id=v.product_id,
+            size=v.size,
+            color=v.color,
+            image_url=normalize_image_url(v.image_url) if v.image_url else None,
+            price=v.price,
+            stock=v.stock,
+            created_at=v.created_at,
+            updated_at=v.updated_at
+        ))
+    
+    return InventoryItemResponse(
+        id=product.id,
+        name=product.name,
+        image_url=normalize_image_url(product.image_url) if product.image_url else None,
+        price=product.price,
+        stock=product.stock,
+        low_stock_threshold=product.low_stock_threshold or 5,
+        status=product.status or "IN_STOCK",
+        category=product.category,
+        gender=product.gender,
+        variants=variant_responses,
+        total_stock=total_stock,
+        seller_id=product.seller_id
+    )
+
+@app.post("/seller/inventory/update-size", response_model=VariantResponse, tags=["Seller"])
+def update_variant_stock(
+    request: VariantStockUpdateRequest,
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(require_approved_seller)
+):
+    """Update variant stock (seller only, only their own products)"""
+    variant = db.query(ProductVariant).filter(ProductVariant.id == request.variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    # Verify product belongs to seller
+    product = db.query(ProductModel).filter(
+        ProductModel.id == variant.product_id,
+        ProductModel.seller_id == current_seller.id
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Variant not found or access denied")
+    
+    # Update variant stock
+    variant.stock = request.stock
+    variant.updated_at = datetime.utcnow()
+    
+    # Update product status
+    update_product_status(product, db)
+    db.commit()
+    db.refresh(variant)
+    
+    # Normalize image URL
+    if variant.image_url:
+        variant.image_url = normalize_image_url(variant.image_url)
+    
+    return variant
+
+@app.get("/seller/inventory/low-stock", response_model=InventoryListResponse, tags=["Seller"])
+def get_low_stock_products(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_seller: User = Depends(require_approved_seller)
+):
+    """Get products with low stock (seller only)"""
+    # Get all seller products
+    products = db.query(ProductModel).filter(ProductModel.seller_id == current_seller.id).all()
+    
+    low_stock_items = []
+    for product in products:
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        variant_stock = sum(v.stock for v in variants if v.stock)
+        total_stock = product.stock + variant_stock
+        threshold = product.low_stock_threshold or 5
+        
+        # Check if low stock
+        if total_stock <= threshold:
+            variant_responses = []
+            for v in variants:
+                variant_responses.append(VariantResponse(
+                    id=v.id,
+                    product_id=v.product_id,
+                    size=v.size,
+                    color=v.color,
+                    image_url=normalize_image_url(v.image_url) if v.image_url else None,
+                    price=v.price,
+                    stock=v.stock,
+                    created_at=v.created_at,
+                    updated_at=v.updated_at
+                ))
+            
+            low_stock_items.append(InventoryItemResponse(
+                id=product.id,
+                name=product.name,
+                image_url=normalize_image_url(product.image_url) if product.image_url else None,
+                price=product.price,
+                stock=product.stock,
+                low_stock_threshold=threshold,
+                status=product.status or "LOW_STOCK",
+                category=product.category,
+                gender=product.gender,
+                variants=variant_responses,
+                total_stock=total_stock,
+                seller_id=product.seller_id
+            ))
+    
+    # Paginate
+    total = len(low_stock_items)
+    offset = (page - 1) * page_size
+    paginated_items = low_stock_items[offset:offset + page_size]
+    
+    return InventoryListResponse(items=paginated_items, total=total, page=page, page_size=page_size)
+
+# ==================== CUSTOMER STOCK ROUTES ====================
+
+@app.get("/products/{product_id}/stock", response_model=StockInfoResponse, tags=["Products"])
+def get_product_stock(
+    product_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get stock information for a product (customer-facing)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Get variants
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product_id).all()
+    
+    variant_info = []
+    for v in variants:
+        variant_info.append({
+            "variant_id": v.id,
+            "size": v.size,
+            "color": v.color,
+            "stock": v.stock,
+            "status": "OUT_OF_STOCK" if v.stock <= 0 else ("LOW_STOCK" if v.stock <= (product.low_stock_threshold or 5) else "IN_STOCK")
+        })
+    
+    return StockInfoResponse(
+        product_id=product.id,
+        stock=product.stock,
+        status=product.status or "IN_STOCK",
+        low_stock_threshold=product.low_stock_threshold or 5,
+        variants=variant_info
+    )
+
 @app.get("/seller/stats", tags=["Seller"])
 def get_seller_stats(
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get seller dashboard statistics (seller only)"""
     # Total products
@@ -2745,7 +3199,7 @@ def get_seller_orders(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get paginated list of order items for seller's products (seller only)"""
     # Query order items by seller_id
@@ -2820,7 +3274,7 @@ def get_seller_orders(
 def get_seller_order_item(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get order item details (seller only)"""
     item = db.query(OrderItem).filter(
@@ -2895,7 +3349,7 @@ def update_order_status_from_items(order_id: int, db: Session):
 def accept_order_item(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Accept an order item (seller only)"""
     item = db.query(OrderItem).filter(
@@ -2956,7 +3410,7 @@ def reject_order_item(
     order_item_id: int,
     request: RejectOrderItemRequest,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Reject an order item (seller only)"""
     item = db.query(OrderItem).filter(
@@ -3019,7 +3473,7 @@ def list_seller_returns(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """List all return requests for seller's products"""
     # Get all order items with return requests for this seller
@@ -3089,7 +3543,7 @@ def list_seller_returns(
 def get_seller_return(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Get return details for a specific order item"""
     item = db.query(OrderItem).filter(
@@ -3142,7 +3596,7 @@ def get_seller_return(
 def accept_return(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Seller accepts a return request"""
     item = db.query(OrderItem).filter(
@@ -3205,7 +3659,7 @@ def reject_return(
     order_item_id: int,
     request: ReturnRejectRequest,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Seller rejects a return request"""
     item = db.query(OrderItem).filter(
@@ -3268,7 +3722,7 @@ def reject_return(
 def mark_return_received(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_seller: User = Depends(seller_only)
+    current_seller: User = Depends(require_approved_seller)
 ):
     """Seller marks returned item as physically received"""
     item = db.query(OrderItem).filter(
@@ -3287,6 +3741,21 @@ def mark_return_received(
     
     item.return_status = "ReturnReceived"
     item.return_processed_at = datetime.utcnow()
+    
+    # Increase stock when return is received
+    product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+    if product:
+        if item.variant_id:
+            # Increase variant stock
+            variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+            if variant:
+                variant.stock += item.quantity
+                update_product_status(product, db)
+        else:
+            # Increase product stock
+            product.stock += item.quantity
+            update_product_status(product, db)
+    
     db.commit()
     db.refresh(item)
     
@@ -3331,7 +3800,7 @@ def mark_return_received(
 @app.get("/admin/sellers", response_model=list[SellerResponse], tags=["Admin"])
 def list_sellers(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all sellers (admin only)"""
     sellers = db.query(User).filter(User.role == "seller").all()
@@ -3340,7 +3809,7 @@ def list_sellers(
 @app.get("/admin/users", response_model=list[UserResponse], tags=["Admin"])
 def list_all_users(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all users (admin only) - returns customers and sellers"""
     users = db.query(User).order_by(User.id.desc()).all()
@@ -3350,7 +3819,7 @@ def list_all_users(
 def get_user_detail(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get full user profile with orders, addresses, and returns (admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
@@ -3407,7 +3876,7 @@ def admin_list_orders(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all orders with filters (admin only)"""
     query = db.query(Order)
@@ -3439,7 +3908,7 @@ def admin_list_order_items(
     status: str | None = Query(None),
     seller_id: int | None = Query(None),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all order items with filters (admin only)"""
     query = db.query(OrderItem)
@@ -3464,7 +3933,7 @@ def admin_override_order_item_status(
     order_item_id: int,
     request: OverrideOrderItemStatusRequest,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Override order item status (admin only)"""
     allowed_statuses = ["Accepted", "Rejected", "Cancelled", "Shipped", "Delivered"]
@@ -3478,11 +3947,28 @@ def admin_override_order_item_status(
     if not item:
         raise HTTPException(status_code=404, detail="Order item not found")
     
+    # Store old status to check if we need to restore stock
+    old_status = item.status
     item.status = request.status
     if request.reason:
         item.rejection_reason = request.reason
     elif request.status != "Rejected":
         item.rejection_reason = None
+    
+    # If order is cancelled, restore stock
+    if request.status == "Cancelled" and old_status != "Cancelled":
+        product = db.query(ProductModel).filter(ProductModel.id == item.product_id).first()
+        if product:
+            if item.variant_id:
+                # Restore variant stock
+                variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+                if variant:
+                    variant.stock += item.quantity
+                    update_product_status(product, db)
+            else:
+                # Restore product stock
+                product.stock += item.quantity
+                update_product_status(product, db)
     
     db.commit()
     db.refresh(item)
@@ -3498,7 +3984,7 @@ def admin_override_order_item_status(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Delete a user account and all related data (admin only)"""
     # Prevent admin from deleting themselves
@@ -3553,7 +4039,7 @@ def delete_user(
 @app.get("/admin/orders", response_model=list[OrderResponse], tags=["Admin"])
 def list_all_orders(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all orders (admin only)"""
     orders = db.query(Order).order_by(Order.created_at.desc()).all()
@@ -3571,7 +4057,7 @@ def list_all_orders(
 def get_order_details(
     order_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get order details (admin only)"""
     order = db.query(Order).filter(Order.id == order_id).first()
@@ -3600,7 +4086,7 @@ def update_order_status(
     order_id: int,
     status: str = Query(..., description="New order status"),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Update order status (admin only)"""
     order = db.query(Order).filter(Order.id == order_id).first()
@@ -3614,7 +4100,7 @@ def update_order_status(
 @app.get("/admin/stats", tags=["Admin"])
 def get_admin_stats(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get admin dashboard statistics (admin only)"""
     total_users = db.query(User).count()
@@ -3653,7 +4139,7 @@ def admin_list_returns(
     customer_id: int | None = Query(None),
     status: str | None = Query(None),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """List all return requests with filters (admin only)"""
     query = (
@@ -3729,7 +4215,7 @@ def admin_list_returns(
 def admin_get_return(
     order_item_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get return details for a specific order item (admin only)"""
     item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
@@ -3780,7 +4266,7 @@ def admin_override_return_status(
     order_item_id: int,
     request: ReturnOverrideRequest,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Admin overrides return status (admin only)"""
     # Validate status
@@ -3848,7 +4334,7 @@ from sqlalchemy import func
 @app.get("/admin/stats/kpis", tags=["Admin"])
 def get_admin_kpis(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get high-level KPIs for admin dashboard"""
     # Platform Overview
@@ -3910,7 +4396,7 @@ def get_admin_kpis(
 def get_orders_trend(
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get orders trend over the past N days"""
     end_date = datetime.utcnow()
@@ -3954,7 +4440,7 @@ def get_orders_trend(
 @app.get("/admin/stats/category-sales", tags=["Admin"])
 def get_category_sales(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get sales by category (pie chart data)"""
     # Join orders -> order_items -> products to get category sales
@@ -3988,7 +4474,7 @@ def get_category_sales(
 def get_top_sellers(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get top sellers by revenue"""
     # Get sellers with their total sales
@@ -4028,7 +4514,7 @@ def get_top_sellers(
 def get_top_products(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get top products by sales"""
     # Get products with their sales stats
@@ -4063,7 +4549,7 @@ def get_top_products(
 def get_returns_stats(
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get returns statistics"""
     end_date = datetime.utcnow()
@@ -4102,7 +4588,7 @@ def get_returns_stats(
 @app.get("/admin/stats/platform-health", tags=["Admin"])
 def get_platform_health(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get platform health metrics"""
     # Out of stock rate
@@ -4159,7 +4645,7 @@ def get_platform_health(
 def approve_seller(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Approve a seller account (admin only)"""
     seller = db.query(User).filter(
@@ -4181,7 +4667,7 @@ def approve_seller(
 def reject_seller(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Reject a seller account (admin only)"""
     seller = db.query(User).filter(
@@ -4200,7 +4686,7 @@ def reject_seller(
 def block_seller(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Block a seller account (admin only) - sets is_active to False"""
     seller = db.query(User).filter(
@@ -4220,7 +4706,7 @@ def block_seller(
 def delete_seller(
     user_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Delete a seller account (admin only) - permanently removes seller"""
     seller = db.query(User).filter(
@@ -4242,7 +4728,7 @@ def delete_seller(
 @app.get("/admin/products/pending", response_model=list[ProductWithSellerInfo], tags=["Admin"])
 def get_pending_products(
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get all pending products with seller information (admin only)"""
     products = db.query(ProductModel).filter(
@@ -4285,7 +4771,7 @@ def get_pending_products(
 def get_admin_product(
     product_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get any product by ID with seller information (admin only) - includes unverified products"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4328,7 +4814,7 @@ def get_admin_product(
 def approve_product(
     product_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Approve a product (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4349,7 +4835,7 @@ def reject_product(
     product_id: int,
     request: RejectProductRequest,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Reject a product with optional notes (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4370,7 +4856,7 @@ def reject_product(
 def verify_product_legacy(
     product_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Legacy endpoint: Approve a product (admin only) - use /approve endpoint instead"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4392,7 +4878,7 @@ def verify_product_legacy(
 def get_all_admin_products(
     status_filter: str | None = Query(None, description="Filter by verification_status: Pending, Approved, Rejected"),
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get all products with seller info and variants (admin only)"""
     query = db.query(ProductModel)
@@ -4443,7 +4929,7 @@ def get_all_admin_products(
 def get_admin_product_full(
     product_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Get product by ID with seller info and variants (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4489,7 +4975,7 @@ def update_admin_product(
     product_id: int,
     product_update: ProductUpdate,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Update product details (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4542,7 +5028,7 @@ def update_admin_product(
 def delete_admin_product(
     product_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Delete a product entirely (admin only) - SQLite safe deletion"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4584,7 +5070,7 @@ def create_admin_product_variant(
     product_id: int,
     variant: VariantCreate,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Create a variant for a product (admin only)"""
     product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
@@ -4616,7 +5102,7 @@ def update_admin_product_variant(
     variant_id: int,
     variant: VariantUpdate,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Update a variant (admin only)"""
     # Verify product exists
@@ -4653,7 +5139,7 @@ def delete_admin_product_variant(
     product_id: int,
     variant_id: int,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_only)
+    current_admin: User = Depends(require_admin)
 ):
     """Delete a variant (admin only)"""
     # Verify product exists
@@ -4688,6 +5174,272 @@ def delete_admin_product_variant(
         db.rollback()
         logger.exception(f"Error deleting variant {variant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete variant: {str(e)}")
+
+# ==================== ADMIN INVENTORY ROUTES ====================
+
+@app.get("/admin/inventory/out-of-stock", response_model=InventoryListResponse, tags=["Admin"])
+def get_out_of_stock_products(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    seller_id: int | None = Query(None),
+    category: str | None = Query(None),
+    gender: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get all products with zero stock (admin only)"""
+    base_query = db.query(ProductModel)
+    
+    # Apply filters
+    if seller_id:
+        base_query = base_query.filter(ProductModel.seller_id == seller_id)
+    if category:
+        base_query = base_query.filter(ProductModel.category == category)
+    if gender:
+        base_query = base_query.filter(func.lower(ProductModel.gender) == gender.lower())
+    
+    products = base_query.all()
+    
+    out_of_stock_items = []
+    for product in products:
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        variant_stock = sum(v.stock for v in variants if v.stock)
+        total_stock = product.stock + variant_stock
+        
+        # Check if out of stock
+        if total_stock <= 0:
+            variant_responses = []
+            for v in variants:
+                variant_responses.append(VariantResponse(
+                    id=v.id,
+                    product_id=v.product_id,
+                    size=v.size,
+                    color=v.color,
+                    image_url=normalize_image_url(v.image_url) if v.image_url else None,
+                    price=v.price,
+                    stock=v.stock,
+                    created_at=v.created_at,
+                    updated_at=v.updated_at
+                ))
+            
+            out_of_stock_items.append(InventoryItemResponse(
+                id=product.id,
+                name=product.name,
+                image_url=normalize_image_url(product.image_url) if product.image_url else None,
+                price=product.price,
+                stock=product.stock,
+                low_stock_threshold=product.low_stock_threshold or 5,
+                status="OUT_OF_STOCK",
+                category=product.category,
+                gender=product.gender,
+                variants=variant_responses,
+                total_stock=total_stock,
+                seller_id=product.seller_id
+            ))
+    
+    # Paginate
+    total = len(out_of_stock_items)
+    offset = (page - 1) * page_size
+    paginated_items = out_of_stock_items[offset:offset + page_size]
+    
+    return InventoryListResponse(items=paginated_items, total=total, page=page, page_size=page_size)
+
+@app.get("/admin/inventory/low-stock", response_model=InventoryListResponse, tags=["Admin"])
+def get_admin_low_stock_products(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    seller_id: int | None = Query(None),
+    category: str | None = Query(None),
+    gender: str | None = Query(None),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get all products with low stock (admin only)"""
+    base_query = db.query(ProductModel)
+    
+    # Apply filters
+    if seller_id:
+        base_query = base_query.filter(ProductModel.seller_id == seller_id)
+    if category:
+        base_query = base_query.filter(ProductModel.category == category)
+    if gender:
+        base_query = base_query.filter(func.lower(ProductModel.gender) == gender.lower())
+    
+    products = base_query.all()
+    
+    low_stock_items = []
+    for product in products:
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        variant_stock = sum(v.stock for v in variants if v.stock)
+        total_stock = product.stock + variant_stock
+        threshold = product.low_stock_threshold or 5
+        
+        # Check if low stock (but not out of stock)
+        if 0 < total_stock <= threshold:
+            variant_responses = []
+            for v in variants:
+                variant_responses.append(VariantResponse(
+                    id=v.id,
+                    product_id=v.product_id,
+                    size=v.size,
+                    color=v.color,
+                    image_url=normalize_image_url(v.image_url) if v.image_url else None,
+                    price=v.price,
+                    stock=v.stock,
+                    created_at=v.created_at,
+                    updated_at=v.updated_at
+                ))
+            
+            low_stock_items.append(InventoryItemResponse(
+                id=product.id,
+                name=product.name,
+                image_url=normalize_image_url(product.image_url) if product.image_url else None,
+                price=product.price,
+                stock=product.stock,
+                low_stock_threshold=threshold,
+                status="LOW_STOCK",
+                category=product.category,
+                gender=product.gender,
+                variants=variant_responses,
+                total_stock=total_stock,
+                seller_id=product.seller_id
+            ))
+    
+    # Paginate
+    total = len(low_stock_items)
+    offset = (page - 1) * page_size
+    paginated_items = low_stock_items[offset:offset + page_size]
+    
+    return InventoryListResponse(items=paginated_items, total=total, page=page, page_size=page_size)
+
+@app.get("/admin/inventory", response_model=InventoryListResponse, tags=["Admin"])
+def get_admin_inventory(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    seller_id: int | None = Query(None),
+    category: str | None = Query(None),
+    gender: str | None = Query(None),
+    status_filter: str | None = Query(None, description="Filter by status: IN_STOCK, LOW_STOCK, OUT_OF_STOCK"),
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Get full inventory list (admin only)"""
+    base_query = db.query(ProductModel)
+    
+    # Apply filters
+    if seller_id:
+        base_query = base_query.filter(ProductModel.seller_id == seller_id)
+    if category:
+        base_query = base_query.filter(ProductModel.category == category)
+    if gender:
+        base_query = base_query.filter(func.lower(ProductModel.gender) == gender.lower())
+    
+    total = base_query.count()
+    offset = (page - 1) * page_size
+    products = base_query.order_by(ProductModel.id.desc()).limit(page_size).offset(offset).all()
+    
+    items = []
+    for product in products:
+        variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+        variant_stock = sum(v.stock for v in variants if v.stock)
+        total_stock = product.stock + variant_stock
+        
+        # Apply status filter
+        if status_filter:
+            product_status = product.status or "IN_STOCK"
+            if product_status != status_filter:
+                continue
+        
+        variant_responses = []
+        for v in variants:
+            variant_responses.append(VariantResponse(
+                id=v.id,
+                product_id=v.product_id,
+                size=v.size,
+                color=v.color,
+                image_url=normalize_image_url(v.image_url) if v.image_url else None,
+                price=v.price,
+                stock=v.stock,
+                created_at=v.created_at,
+                updated_at=v.updated_at
+            ))
+        
+        items.append(InventoryItemResponse(
+            id=product.id,
+            name=product.name,
+            image_url=normalize_image_url(product.image_url) if product.image_url else None,
+            price=product.price,
+            stock=product.stock,
+            low_stock_threshold=product.low_stock_threshold or 5,
+            status=product.status or "IN_STOCK",
+            category=product.category,
+            gender=product.gender,
+            variants=variant_responses,
+            total_stock=total_stock,
+            seller_id=product.seller_id
+        ))
+    
+    # Recalculate total if status filter was applied
+    if status_filter:
+        total = len(items)
+    
+    return InventoryListResponse(items=items, total=total, page=page, page_size=page_size)
+
+@app.patch("/admin/inventory/update/{product_id}", response_model=InventoryItemResponse, tags=["Admin"])
+def admin_update_product_stock(
+    product_id: int,
+    request: StockUpdateRequest,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_only)
+):
+    """Update product stock (admin override)"""
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Update stock
+    product.stock = request.stock
+    if request.low_stock_threshold is not None:
+        product.low_stock_threshold = request.low_stock_threshold
+    
+    # Update status
+    update_product_status(product, db)
+    db.refresh(product)
+    
+    # Get variants for response
+    variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    variant_stock = sum(v.stock for v in variants if v.stock)
+    total_stock = product.stock + variant_stock
+    
+    variant_responses = []
+    for v in variants:
+        variant_responses.append(VariantResponse(
+            id=v.id,
+            product_id=v.product_id,
+            size=v.size,
+            color=v.color,
+            image_url=normalize_image_url(v.image_url) if v.image_url else None,
+            price=v.price,
+            stock=v.stock,
+            created_at=v.created_at,
+            updated_at=v.updated_at
+        ))
+    
+    return InventoryItemResponse(
+        id=product.id,
+        name=product.name,
+        image_url=normalize_image_url(product.image_url) if product.image_url else None,
+        price=product.price,
+        stock=product.stock,
+        low_stock_threshold=product.low_stock_threshold or 5,
+        status=product.status or "IN_STOCK",
+        category=product.category,
+        gender=product.gender,
+        variants=variant_responses,
+        total_stock=total_stock,
+        seller_id=product.seller_id
+    )
 
 @app.post("/admin/create-super-admin", tags=["Admin"])
 def create_super_admin(
@@ -5090,14 +5842,10 @@ def users_reset_password(data: ResetPasswordRequest, db: Session = Depends(get_d
 @app.get("/profile/addresses", response_model=list[AddressResponse], tags=["Users"])
 def get_user_addresses(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get all addresses for the logged-in user"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    addresses = db.query(Address).filter(Address.user_id == user.id).order_by(
+    addresses = db.query(Address).filter(Address.user_id == current_user_obj.id).order_by(
         Address.is_default.desc(), Address.created_at.desc()
     ).all()
     return addresses
@@ -5107,20 +5855,16 @@ def get_user_addresses(
 def create_address(
     address: AddressCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Create a new address for the logged-in user"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
     # Check if this is the first address
-    existing_addresses = db.query(Address).filter(Address.user_id == user.id).count()
+    existing_addresses = db.query(Address).filter(Address.user_id == current_user_obj.id).count()
     is_first_address = existing_addresses == 0
     
     # Create new address
     new_address = Address(
-        user_id=user.id,
+        user_id=current_user_obj.id,
         **address.model_dump(),
         is_default=is_first_address  # First address is automatically default
     )
@@ -5140,12 +5884,10 @@ def update_address(
     address_id: int,
     address_update: AddressUpdate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Update an existing address"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     address = db.query(Address).filter(
         Address.id == address_id,
@@ -5170,12 +5912,10 @@ def update_address(
 def delete_address(
     address_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Delete an address. If it was default, set next available as default."""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     address = db.query(Address).filter(
         Address.id == address_id,
@@ -5212,12 +5952,10 @@ def delete_address(
 def set_default_address(
     address_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Set an address as default"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     address = db.query(Address).filter(
         Address.id == address_id,
@@ -5243,12 +5981,10 @@ def set_default_address(
 @app.get("/profile/addresses/default", response_model=AddressResponse, tags=["Users"])
 def get_default_address(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get the default address for checkout"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     address = db.query(Address).filter(
         Address.user_id == user.id,
@@ -5266,7 +6002,7 @@ def get_default_address(
 @app.get("/user/address", response_model=list[AddressResponse], tags=["User"])
 def get_user_addresses_legacy(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get all addresses for the logged-in user (legacy endpoint)"""
     return get_user_addresses(db, current_user)
@@ -5275,7 +6011,7 @@ def get_user_addresses_legacy(
 def create_address_legacy(
     address: AddressCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Create a new address for the logged-in user (legacy endpoint)"""
     return create_address(address, db, current_user)
@@ -5285,7 +6021,7 @@ def update_address_legacy(
     address_id: int,
     address_update: AddressUpdate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Update an existing address (legacy endpoint)"""
     return update_address(address_id, address_update, db, current_user)
@@ -5294,7 +6030,7 @@ def update_address_legacy(
 def delete_address_legacy(
     address_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Delete an address (legacy endpoint)"""
     return delete_address(address_id, db, current_user)
@@ -5303,7 +6039,7 @@ def delete_address_legacy(
 def set_default_address_legacy(
     address_id: int,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Set an address as default (legacy endpoint)"""
     return set_default_address(address_id, db, current_user)
@@ -5311,7 +6047,7 @@ def set_default_address_legacy(
 @app.get("/user/address/default", response_model=AddressResponse, tags=["User"])
 def get_default_address_legacy(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get the default address for checkout (legacy endpoint)"""
     return get_default_address(db, current_user)
@@ -5320,12 +6056,10 @@ def get_default_address_legacy(
 @app.get("/user/profile", tags=["User"])
 def get_user_profile_legacy(
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user_obj: User = Depends(require_customer)
 ):
     """Get user profile including has_address status"""
-    user = db.query(User).filter(User.username == current_user).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = current_user_obj
     
     return {
         "id": user.id,

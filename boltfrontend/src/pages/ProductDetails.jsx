@@ -30,6 +30,8 @@ export default function ProductDetails() {
     materialCare: false,
     specifications: false
   });
+  const [stockInfo, setStockInfo] = useState(null);
+  const [stockLoading, setStockLoading] = useState(false);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -38,6 +40,14 @@ export default function ProductDetails() {
         setProduct(data);
         setCurrentImage(data.image_url);
         setError(null);
+        
+        // Fetch stock information
+        try {
+          const stockRes = await API.get(`/products/${productId}/stock`);
+          setStockInfo(stockRes.data);
+        } catch (err) {
+          console.error('Failed to fetch stock info:', err);
+        }
         
         // Fetch reviews
         try {
@@ -118,9 +128,17 @@ export default function ProductDetails() {
       return;
     }
 
+    // Check stock before adding
+    if (isOutOfStock()) {
+      alert('This item is out of stock');
+      return;
+    }
+
     try {
+      const variantId = getSelectedVariantId();
       await API.post('/cart/add', {
         product_id: product.id,
+        variant_id: variantId,
         quantity: 1,
         size: selectedSize,
         color: selectedColor
@@ -146,9 +164,17 @@ export default function ProductDetails() {
       return;
     }
 
+    // Check stock before adding
+    if (isOutOfStock()) {
+      alert('This item is out of stock');
+      return;
+    }
+
     try {
+      const variantId = getSelectedVariantId();
       await API.post('/cart/add', {
         product_id: product.id,
+        variant_id: variantId,
         quantity: 1,
         size: selectedSize,
         color: selectedColor
@@ -234,6 +260,67 @@ export default function ProductDetails() {
   const colors = getColors();
   const variants = product.variants || {};
   const specifications = product.specifications || {};
+  
+  // Helper functions for stock checking
+  const getStockStatus = () => {
+    if (!stockInfo) return null;
+    return stockInfo.status || 'IN_STOCK';
+  };
+  
+  const isOutOfStock = () => {
+    const status = getStockStatus();
+    if (status === 'OUT_OF_STOCK') return true;
+    
+    // Check variant stock if size/color selected
+    if (selectedSize && stockInfo?.variants) {
+      const variant = stockInfo.variants.find(v => 
+        v.size === selectedSize && (!selectedColor || v.color === selectedColor)
+      );
+      if (variant && variant.status === 'OUT_OF_STOCK') return true;
+    }
+    
+    return false;
+  };
+  
+  const getStockMessage = () => {
+    if (!stockInfo) return null;
+    
+    if (selectedSize && stockInfo.variants) {
+      const variant = stockInfo.variants.find(v => 
+        v.size === selectedSize && (!selectedColor || v.color === selectedColor)
+      );
+      if (variant) {
+        if (variant.stock <= 0) return 'Out of Stock';
+        if (variant.stock === 1) return 'Only 1 Left';
+        if (variant.stock <= stockInfo.low_stock_threshold) return `Only ${variant.stock} Left`;
+        return 'In Stock';
+      }
+    }
+    
+    const status = getStockStatus();
+    if (status === 'OUT_OF_STOCK') return 'Out of Stock';
+    if (stockInfo.stock === 1) return 'Only 1 Left';
+    if (stockInfo.stock <= stockInfo.low_stock_threshold) return `Only ${stockInfo.stock} Left`;
+    return 'In Stock';
+  };
+  
+  const isSizeOutOfStock = (size) => {
+    if (!stockInfo?.variants) return false;
+    const variant = stockInfo.variants.find(v => v.size === size);
+    return variant && variant.status === 'OUT_OF_STOCK';
+  };
+  
+  // Find variant ID from selected size/color
+  const getSelectedVariantId = () => {
+    const product_variants = product?.product_variants || [];
+    if (product_variants.length === 0) return null;
+    if (!selectedSize) return null;
+    
+    const variant = product_variants.find(v => 
+      v.size === selectedSize && (!selectedColor || v.color === selectedColor)
+    );
+    return variant?.id || null;
+  };
 
   return (
     <div className="max-w-7xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
@@ -285,6 +372,21 @@ export default function ProductDetails() {
 
           <p className="mb-6 text-neutral-700">{product.description}</p>
 
+          {/* Stock Status */}
+          {stockInfo && (
+            <div className="mb-4">
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
+                getStockStatus() === 'OUT_OF_STOCK' 
+                  ? 'bg-red-100 text-red-800'
+                  : getStockStatus() === 'LOW_STOCK'
+                  ? 'bg-yellow-100 text-yellow-800'
+                  : 'bg-green-100 text-green-800'
+              }`}>
+                {getStockMessage()}
+              </div>
+            </div>
+          )}
+
           {/* Size Selector */}
           {sizes.length > 0 && (
             <div className="mb-6">
@@ -292,19 +394,27 @@ export default function ProductDetails() {
                 Size {selectedSize ? `: ${selectedSize}` : '*'}
               </label>
               <div className="flex flex-wrap gap-2">
-                {sizes.map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => setSelectedSize(size)}
-                    className={`px-4 py-2 border-2 transition-colors ${
-                      selectedSize === size
-                        ? 'border-neutral-900 bg-neutral-900 text-white'
-                        : 'border-neutral-300 hover:border-neutral-900'
-                    }`}
-                  >
-                    {size}
-                  </button>
-                ))}
+                {sizes.map((size) => {
+                  const outOfStock = isSizeOutOfStock(size);
+                  return (
+                    <button
+                      key={size}
+                      onClick={() => !outOfStock && setSelectedSize(size)}
+                      disabled={outOfStock}
+                      className={`px-4 py-2 border-2 transition-colors ${
+                        outOfStock
+                          ? 'border-neutral-200 bg-neutral-100 text-neutral-400 cursor-not-allowed opacity-50'
+                          : selectedSize === size
+                          ? 'border-neutral-900 bg-neutral-900 text-white'
+                          : 'border-neutral-300 hover:border-neutral-900'
+                      }`}
+                      title={outOfStock ? 'Out of Stock' : ''}
+                    >
+                      {size}
+                      {outOfStock && <span className="ml-1 text-xs">(OOS)</span>}
+                    </button>
+                  );
+                })}
               </div>
               <button
                 type="button"
@@ -357,15 +467,25 @@ export default function ProductDetails() {
             </button>
             <button
               onClick={handleAddToCart}
-              className="px-5 py-2.5 bg-neutral-900 text-neutral-50 hover:bg-neutral-800 transition-colors"
+              disabled={isOutOfStock()}
+              className={`px-5 py-2.5 transition-colors ${
+                isOutOfStock()
+                  ? 'bg-neutral-300 text-neutral-500 cursor-not-allowed'
+                  : 'bg-neutral-900 text-neutral-50 hover:bg-neutral-800'
+              }`}
             >
-              Add to Cart
+              {isOutOfStock() ? 'Out of Stock' : 'Add to Cart'}
             </button>
             <button
               onClick={handleOrderNow}
-              className="px-5 py-2.5 bg-neutral-900 text-neutral-50 hover:bg-neutral-800 transition-colors"
+              disabled={isOutOfStock()}
+              className={`px-5 py-2.5 transition-colors ${
+                isOutOfStock()
+                  ? 'bg-neutral-300 text-neutral-500 cursor-not-allowed'
+                  : 'bg-neutral-900 text-neutral-50 hover:bg-neutral-800'
+              }`}
             >
-              Order Now
+              {isOutOfStock() ? 'Out of Stock' : 'Order Now'}
             </button>
           </div>
         </div>

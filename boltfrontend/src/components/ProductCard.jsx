@@ -77,6 +77,11 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
             Sale
           </div>
         )}
+        {product.status === 'OUT_OF_STOCK' && (
+          <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 text-xs uppercase tracking-wider">
+            Out of Stock
+          </div>
+        )}
       </div>
 
       <div className="space-y-1" onClick={() => navigate(`/product/${product.id}`)}>

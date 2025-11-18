@@ -13,6 +13,7 @@ import AdminProducts from './pages/AdminProducts';
 import AdminSellers from './pages/AdminSellers';
 import AdminReturns from './pages/AdminReturns';
 import AdminReturnDetail from './pages/AdminReturnDetail';
+import AdminInventory from './pages/AdminInventory';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -109,6 +110,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AdminReturnDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/inventory"
+        element={
+          <ProtectedRoute>
+            <AdminInventory />
           </ProtectedRoute>
         }
       />
