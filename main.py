@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
-from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant
+from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant, ProductImage
 from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo, StockUpdateRequest, VariantStockUpdateRequest, InventoryItemResponse, InventoryListResponse, StockInfoResponse
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, require_admin, require_seller, require_approved_seller, require_customer, validate_username, validate_password_strength
 from fastapi import Query
@@ -408,6 +408,62 @@ def migrate_stock_fields():
     except Exception as e:
         logger.exception(f"Stock fields migration error: {e}")
 
+# Safe migration: Create product_images table and migrate old image_url data
+def migrate_product_images():
+    """Safely create product_images table and migrate old image_url data"""
+    try:
+        with engine.begin() as conn:
+            # Check if product_images table exists
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='product_images'"))
+            if not result.fetchone():
+                logger.info("Creating product_images table")
+                conn.execute(text("""
+                    CREATE TABLE product_images (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER NOT NULL,
+                        image_url TEXT NOT NULL,
+                        is_primary BOOLEAN DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(product_id) REFERENCES products(id)
+                    )
+                """))
+                # Create indexes
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_images_product_id ON product_images(product_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_product_images_is_primary ON product_images(is_primary)"))
+                logger.info("Product images table created successfully")
+            
+            # Migrate old image_url data from products table
+            logger.info("Migrating old image_url data to product_images table")
+            products_with_images = conn.execute(text("""
+                SELECT id, image_url FROM products 
+                WHERE image_url IS NOT NULL AND image_url != ''
+            """)).fetchall()
+            
+            migrated_count = 0
+            for row in products_with_images:
+                product_id, image_url = row[0], row[1]
+                # Check if product already has images
+                existing = conn.execute(text("""
+                    SELECT 1 FROM product_images WHERE product_id = :pid
+                """), {"pid": product_id}).fetchone()
+                
+                if not existing and image_url:
+                    # Store image URL as-is (normalization will happen when products are loaded)
+                    # Insert as primary image
+                    conn.execute(text("""
+                        INSERT INTO product_images (product_id, image_url, is_primary)
+                        VALUES (:pid, :url, 1)
+                    """), {"pid": product_id, "url": image_url})
+                    migrated_count += 1
+            
+            if migrated_count > 0:
+                logger.info(f"Migrated {migrated_count} product images from old image_url field")
+            else:
+                logger.info("No products to migrate (all already migrated or no images)")
+                
+    except Exception as e:
+        logger.exception(f"Product images migration error: {e}")
+
 # Safe migration: Add user role and status columns if they don't exist
 def migrate_user_fields():
     """Safely add role, is_seller, is_admin, is_verified, is_approved, has_address, gender, dob columns to users table if they don't exist"""
@@ -471,6 +527,7 @@ migrate_reviews_table()
 migrate_product_variants_table()
 migrate_variant_id_fields()
 migrate_stock_fields()
+migrate_product_images()  # Migrate product images
 
 # Static file serving for uploads
 UPLOADS_DIR = "uploads"
@@ -484,6 +541,29 @@ if os.path.exists(IMAGES_DIR):
 
 # Backend base URL for image normalization (configurable via env)
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
+
+async def save_image_file(file: UploadFile) -> str:
+    """Save an uploaded image file and return its URL"""
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail=f"File {file.filename} is not an image")
+    
+    # Generate unique filename
+    file_extension = os.path.splitext(file.filename)[1] if file.filename else '.jpg'
+    unique_filename = f"{uuid.uuid4().hex}{file_extension}"
+    file_path = os.path.join(UPLOADS_DIR, unique_filename)
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Return the URL path
+        return f"/uploads/{unique_filename}"
+    except Exception as e:
+        logger.exception(f"Error saving file {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file {file.filename}")
 
 def normalize_image_url(image_url: str | None) -> str | None:
     """Normalize product image URL to absolute URL if needed"""
@@ -984,6 +1064,18 @@ def normalize_product_gender(product, db: Session = None):
                     variant.image_url = normalize_image_url(variant.image_url)
 
             product.product_variants = variants
+            
+            # Load product images
+            images = db.query(ProductImage).filter(
+                ProductImage.product_id == product.id
+            ).order_by(ProductImage.is_primary.desc(), ProductImage.id.asc()).all()
+            
+            # Normalize image URLs
+            for img in images:
+                if img.image_url:
+                    img.image_url = normalize_image_url(img.image_url)
+            
+            product.images = images
 
         return product
     except Exception as e:
@@ -2465,18 +2557,53 @@ def get_seller_products(
     return [normalize_product_gender(p, db) for p in products]
 
 @app.post("/seller/products/create", response_model=ProductSchema, tags=["Seller"])
-def create_seller_product(
-    product: ProductCreate,
+async def create_seller_product(
+    request: Request,
     db: Session = Depends(get_db),
     current_seller: User = Depends(require_approved_seller)
 ):
-    """Create a new product (seller only)"""
+    """Create a new product with multiple images (seller only)"""
     try:
+        # Check content type to support both JSON and Form data
+        content_type = request.headers.get("content-type", "")
+        
+        if "application/json" in content_type:
+            # Old way: JSON body (backward compatibility)
+            body = await request.json()
+            product = ProductCreate(**body)
+            product_data = product.model_dump()
+            images: list[UploadFile] = []
+        else:
+            # New way: Form data with images
+            form = await request.form()
+            # Parse product data from form
+            product_data = {
+                "name": form.get("name", ""),
+                "description": form.get("description") or None,
+                "image_url": form.get("image_url") or None,  # Legacy support
+                "price": float(form.get("price", 0)),
+                "discounted_price": float(form.get("discounted_price")) if form.get("discounted_price") else None,
+                "gender": form.get("gender") or None,
+                "category": form.get("category") or None,
+                "sizes": json.loads(form.get("sizes", "[]")) if form.get("sizes") else [],
+                "colors": json.loads(form.get("colors", "[]")) if form.get("colors") else [],
+                "variants": json.loads(form.get("variants", "{}")) if form.get("variants") else None,
+                "size_fit": form.get("size_fit") or None,
+                "material_care": form.get("material_care") or None,
+                "specifications": json.loads(form.get("specifications", "{}")) if form.get("specifications") else {},
+                "stock": int(form.get("stock", 0)) if form.get("stock") else 0,
+                "low_stock_threshold": int(form.get("low_stock_threshold", 5)) if form.get("low_stock_threshold") else 5,
+            }
+            # Get images from form
+            images = form.getlist("images")
+            # Validate product data
+            product = ProductCreate(**product_data)
+            product_data = product.model_dump()
+        
         # Log the raw product object before model_dump
         logger.info(f"Received product create request - Name: {product.name}, Price: {product.price}")
         logger.info(f"Raw product - sizes type: {type(product.sizes)}, colors type: {type(product.colors)}, specifications type: {type(product.specifications)}")
-        
-        product_data = product.model_dump()
+        logger.info(f"Images count: {len(images) if isinstance(images, list) else 0}")
         
         # Log incoming data for debugging
         logger.info(f"Creating product - Name: {product_data.get('name')}, Price: {product_data.get('price')}, Discounted: {product_data.get('discounted_price')}")
@@ -2559,13 +2686,43 @@ def create_seller_product(
             verification_status="Pending",  # Set to Pending for admin review
             submitted_at=datetime.utcnow()  # Record submission time
         )
+        
+        # Update product status based on stock
+        update_product_status(new_product, db)
         logger.info(f"ProductModel created, about to add to DB")
         db.add(new_product)
         logger.info(f"ProductModel added to session, about to commit")
         db.commit()
         logger.info(f"Committed to DB, about to refresh")
         db.refresh(new_product)
-        logger.info(f"Refreshed, about to normalize")
+        logger.info(f"Refreshed, about to save images")
+        
+        # Save images to ProductImage table
+        if isinstance(images, list) and len(images) > 0:
+            for i, image_file in enumerate(images):
+                if hasattr(image_file, 'read'):  # It's an UploadFile
+                    image_url = await save_image_file(image_file)
+                    is_primary = (i == 0)  # First image is primary
+                    db.add(ProductImage(
+                        product_id=new_product.id,
+                        image_url=image_url,
+                        is_primary=is_primary
+                    ))
+            db.commit()
+        elif product_data.get('image_url'):  # Legacy: save old image_url as primary image
+            # Check if images already exist (from migration)
+            existing_images = db.query(ProductImage).filter(
+                ProductImage.product_id == new_product.id
+            ).first()
+            if not existing_images:
+                db.add(ProductImage(
+                    product_id=new_product.id,
+                    image_url=normalize_image_url(product_data['image_url']) or product_data['image_url'],
+                    is_primary=True
+                ))
+                db.commit()
+        
+        logger.info(f"Images saved, about to normalize")
         # Normalize product for response (deserialize JSON fields back to Python objects)
         # This modifies the SQLAlchemy object in-place to convert JSON strings to Python objects
         normalize_product_gender(new_product, db)
@@ -2739,14 +2896,24 @@ def update_seller_product(
         
         logger.info(f"Serialized product data - sizes: {product_data.get('sizes')}, colors: {product_data.get('colors')}, specifications: {product_data.get('specifications')}")
         
-        for key, value in product_data.items():
+        # Filter out fields that don't exist in ProductModel
+        model_fields = {
+            'name', 'description', 'image_url', 'price', 'discounted_price', 
+            'gender', 'category', 'sizes', 'colors', 'legacy_variants', 
+            'size_fit', 'material_care', 'specifications', 'stock', 'low_stock_threshold'
+        }
+        filtered_data = {k: v for k, v in product_data.items() if k in model_fields}
+        
+        for key, value in filtered_data.items():
             setattr(existing_product, key, value)
         
         # Reset verification status when product is updated
         existing_product.is_verified = False
         existing_product.verification_status = "Pending"
         
-        db.commit()
+        # Update product status based on stock
+        update_product_status(existing_product, db)
+        
         db.refresh(existing_product)
         normalize_product_gender(existing_product, db)
         logger.info(f"Product updated successfully - ID: {existing_product.id}")
@@ -4779,7 +4946,7 @@ def get_admin_product(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    normalize_product_gender(product)
+    normalize_product_gender(product, db)
     
     # Convert SQLAlchemy model to dict
     product_dict = {
@@ -4909,6 +5076,16 @@ def get_all_admin_products(
         # Normalize product image URL
         image_url = normalize_image_url(product.image_url)
         
+        # Get product images
+        images = db.query(ProductImage).filter(
+            ProductImage.product_id == product.id
+        ).order_by(ProductImage.is_primary.desc(), ProductImage.id.asc()).all()
+        
+        # Normalize image URLs
+        for img in images:
+            if img.image_url:
+                img.image_url = normalize_image_url(img.image_url)
+        
         result.append(AdminProductResponse(
             id=product.id,
             name=product.name,
@@ -4920,7 +5097,8 @@ def get_all_admin_products(
             category=product.category,
             verification_status=product.verification_status,
             seller=seller_info,
-            variants=[VariantResponse.model_validate(v) for v in variants]
+            variants=[VariantResponse.model_validate(v) for v in variants],
+            images=images
         ))
     
     return result
@@ -4937,7 +5115,7 @@ def get_admin_product_full(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    normalize_product_gender(product)
+    normalize_product_gender(product, db)
     
     # Get seller info
     seller_info = None
@@ -4956,6 +5134,16 @@ def get_admin_product_full(
     # Normalize product image URL
     image_url = normalize_image_url(product.image_url)
     
+    # Get product images
+    images = db.query(ProductImage).filter(
+        ProductImage.product_id == product.id
+    ).order_by(ProductImage.is_primary.desc(), ProductImage.id.asc()).all()
+    
+    # Normalize image URLs
+    for img in images:
+        if img.image_url:
+            img.image_url = normalize_image_url(img.image_url)
+    
     return AdminProductResponse(
         id=product.id,
         name=product.name,
@@ -4967,7 +5155,8 @@ def get_admin_product_full(
         category=product.category,
         verification_status=product.verification_status,
         seller=seller_info,
-        variants=[VariantResponse.model_validate(v) for v in variants]
+        variants=[VariantResponse.model_validate(v) for v in variants],
+        images=images
     )
 
 @app.patch("/admin/products/{product_id}", response_model=AdminProductResponse, tags=["Admin"])
@@ -4992,7 +5181,12 @@ def update_admin_product(
     if 'gender' in update_data:
         normalize_product_gender(product)
     
-    db.commit()
+    # Update product status based on stock if stock was updated
+    if 'stock' in update_data or 'low_stock_threshold' in update_data:
+        update_product_status(product, db)
+    else:
+        db.commit()
+    
     db.refresh(product)
     
     # Get seller info
@@ -5010,6 +5204,16 @@ def update_admin_product(
     
     image_url = normalize_image_url(product.image_url)
     
+    # Get product images
+    images = db.query(ProductImage).filter(
+        ProductImage.product_id == product.id
+    ).order_by(ProductImage.is_primary.desc(), ProductImage.id.asc()).all()
+    
+    # Normalize image URLs
+    for img in images:
+        if img.image_url:
+            img.image_url = normalize_image_url(img.image_url)
+    
     return AdminProductResponse(
         id=product.id,
         name=product.name,
@@ -5021,8 +5225,82 @@ def update_admin_product(
         category=product.category,
         verification_status=product.verification_status,
         seller=seller_info,
-        variants=[VariantResponse.model_validate(v) for v in variants]
+        variants=[VariantResponse.model_validate(v) for v in variants],
+        images=images
     )
+
+@app.patch("/admin/products/{product_id}/images/{image_id}/set-primary", tags=["Admin"])
+def set_primary_image(
+    product_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin)
+):
+    """Set an image as primary for a product (admin only)"""
+    # Verify product exists
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Verify image exists and belongs to product
+    image = db.query(ProductImage).filter(
+        ProductImage.id == image_id,
+        ProductImage.product_id == product_id
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Set all images for this product to not primary
+    db.query(ProductImage).filter(
+        ProductImage.product_id == product_id
+    ).update({"is_primary": False})
+    
+    # Set selected image as primary
+    image.is_primary = True
+    db.commit()
+    db.refresh(image)
+    
+    # Normalize image URL
+    if image.image_url:
+        image.image_url = normalize_image_url(image.image_url)
+    
+    return {"message": "Primary image updated successfully", "image": image}
+
+@app.delete("/admin/products/{product_id}/images/{image_id}", tags=["Admin"])
+def delete_product_image(
+    product_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin)
+):
+    """Delete a product image (admin only)"""
+    # Verify product exists
+    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Verify image exists and belongs to product
+    image = db.query(ProductImage).filter(
+        ProductImage.id == image_id,
+        ProductImage.product_id == product_id
+    ).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # If deleting primary image, set first remaining image as primary
+    if image.is_primary:
+        remaining_images = db.query(ProductImage).filter(
+            ProductImage.product_id == product_id,
+            ProductImage.id != image_id
+        ).order_by(ProductImage.id.asc()).all()
+        
+        if remaining_images:
+            remaining_images[0].is_primary = True
+    
+    db.delete(image)
+    db.commit()
+    
+    return {"message": "Image deleted successfully"}
 
 @app.delete("/admin/products/{product_id}", tags=["Admin"])
 def delete_admin_product(

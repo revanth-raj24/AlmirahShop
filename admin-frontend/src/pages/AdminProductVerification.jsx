@@ -147,17 +147,25 @@ export default function AdminProductVerification() {
                     <tr key={product.id} className="hover:bg-neutral-50">
                       <td className="px-6 py-4">
                         <div className="w-16 h-16 bg-neutral-100 rounded overflow-hidden">
-                          {product.image_url ? (
-                            <img
-                              src={resolveImageUrl(product.image_url)}
-                              alt={product.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-neutral-400">
-                              <Package className="w-6 h-6" />
-                            </div>
-                          )}
+                          {(() => {
+                            // Use images array if available, fallback to image_url
+                            const imageUrl = product.images && product.images.length > 0
+                              ? resolveImageUrl(product.images[0].image_url)
+                              : product.image_url
+                                ? resolveImageUrl(product.image_url)
+                                : null;
+                            return imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={product.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-neutral-400">
+                                <Package className="w-6 h-6" />
+                              </div>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -175,6 +183,17 @@ export default function AdminProductVerification() {
                         {product.discounted_price && (
                           <div className="text-xs text-neutral-500 line-through">
                             ₹{product.discounted_price.toFixed(2)}
+                          </div>
+                        )}
+                        {product.stock !== undefined && (
+                          <div className="text-xs mt-1">
+                            <span className={`font-medium ${
+                              product.status === 'OUT_OF_STOCK' ? 'text-red-600' :
+                              product.status === 'LOW_STOCK' ? 'text-yellow-600' :
+                              'text-green-600'
+                            }`}>
+                              Stock: {product.stock} units
+                            </span>
                           </div>
                         )}
                       </td>

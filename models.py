@@ -38,6 +38,7 @@ class Product(Base):
     seller = relationship("User", back_populates="products", foreign_keys=[seller_id])
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
 
 class User(Base):
     __tablename__ = "users"
@@ -212,6 +213,17 @@ class ProductVariant(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     product = relationship("Product", back_populates="variants")
+
+class ProductImage(Base):
+    __tablename__ = "product_images"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    image_url = Column(String, nullable=False)
+    is_primary = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="images")
 
 
 

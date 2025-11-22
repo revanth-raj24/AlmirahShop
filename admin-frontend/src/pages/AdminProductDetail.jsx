@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { resolveImageUrl } from '../utils/imageUtils';
-import { ArrowLeft, Save, Plus, Edit, Trash2, X, Package, Upload, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Edit, Trash2, X, Package, Upload, CheckCircle, XCircle, Star, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function AdminProductDetail() {
@@ -29,6 +29,8 @@ export default function AdminProductDetail() {
     discounted_price: '',
     gender: '',
     category: '',
+    stock: '',
+    low_stock_threshold: '',
   });
   
   const [selectedFile, setSelectedFile] = useState(null);
@@ -42,6 +44,8 @@ export default function AdminProductDetail() {
   });
   const [variantFile, setVariantFile] = useState(null);
   const [variantImagePreview, setVariantImagePreview] = useState(null);
+  const [selectedImageModal, setSelectedImageModal] = useState(null);
+  const [updatingPrimary, setUpdatingPrimary] = useState(false);
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -52,6 +56,28 @@ export default function AdminProductDetail() {
       fetchProductDetails();
     }
   }, [user, navigate, id]);
+
+  // Keyboard support for image modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!selectedImageModal || !product?.images) return;
+
+      if (e.key === 'Escape') {
+        setSelectedImageModal(null);
+      } else if (e.key === 'ArrowLeft') {
+        const currentIndex = product.images.findIndex(img => img.id === selectedImageModal.id);
+        const prevIndex = currentIndex > 0 ? currentIndex - 1 : product.images.length - 1;
+        setSelectedImageModal(product.images[prevIndex]);
+      } else if (e.key === 'ArrowRight') {
+        const currentIndex = product.images.findIndex(img => img.id === selectedImageModal.id);
+        const nextIndex = currentIndex < product.images.length - 1 ? currentIndex + 1 : 0;
+        setSelectedImageModal(product.images[nextIndex]);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedImageModal, product]);
 
   const fetchProductDetails = async () => {
     setLoading(true);
@@ -67,8 +93,13 @@ export default function AdminProductDetail() {
         discounted_price: data.discounted_price?.toString() || '',
         gender: data.gender || '',
         category: data.category || '',
+        stock: data.stock?.toString() || '0',
+        low_stock_threshold: data.low_stock_threshold?.toString() || '5',
       });
-      if (data.image_url) {
+      // Set image preview from images array or fallback to image_url
+      if (data.images && data.images.length > 0) {
+        setImagePreview(resolveImageUrl(data.images[0].image_url));
+      } else if (data.image_url) {
         setImagePreview(resolveImageUrl(data.image_url));
       }
     } catch (err) {
@@ -98,6 +129,37 @@ export default function AdminProductDetail() {
     setVariantFile(file);
     const preview = URL.createObjectURL(file);
     setVariantImagePreview(preview);
+  };
+
+  const handleImageClick = (image) => {
+    setSelectedImageModal(image);
+  };
+
+  const handleSetPrimary = async (imageId) => {
+    if (!confirm('Set this image as the primary image?')) return;
+    
+    setUpdatingPrimary(true);
+    try {
+      await API.patch(`/admin/products/${id}/images/${imageId}/set-primary`);
+      alert('Primary image updated successfully!');
+      fetchProductDetails(); // Refresh to show updated order
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to update primary image');
+    } finally {
+      setUpdatingPrimary(false);
+    }
+  };
+
+  const handleDeleteImage = async (imageId) => {
+    if (!confirm('Are you sure you want to delete this image?')) return;
+    
+    try {
+      await API.delete(`/admin/products/${id}/images/${imageId}`);
+      alert('Image deleted successfully!');
+      fetchProductDetails(); // Refresh to show updated images
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to delete image');
+    }
   };
 
   const handleSave = async () => {
@@ -134,6 +196,8 @@ export default function AdminProductDetail() {
         discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : undefined,
         gender: formData.gender || undefined,
         category: formData.category || undefined,
+        stock: formData.stock ? parseInt(formData.stock) : undefined,
+        low_stock_threshold: formData.low_stock_threshold ? parseInt(formData.low_stock_threshold) : undefined,
       };
       
       // Remove undefined values
@@ -387,24 +451,123 @@ export default function AdminProductDetail() {
           <h2 className="font-serif text-2xl text-neutral-900 mb-6">Product Information</h2>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-            {/* Product Image */}
+            {/* Product Images Gallery */}
             <div>
               <label className="block text-sm font-medium text-neutral-700 mb-2">
-                Product Image
+                Product Images {product?.images && product.images.length > 0 && `(${product.images.length})`}
               </label>
-              <div className="aspect-[3/4] bg-neutral-100 rounded-lg overflow-hidden mb-4 border-2 border-dashed border-neutral-300">
+              {/* Main Image Display */}
+              <div 
+                className="aspect-[3/4] bg-neutral-100 rounded-lg overflow-hidden mb-4 border-2 border-dashed border-neutral-300 cursor-pointer group relative"
+                onClick={() => {
+                  if (product?.images && product.images.length > 0) {
+                    handleImageClick(product.images[0]);
+                  } else if (product?.image_url) {
+                    handleImageClick({ id: 0, image_url: product.image_url, is_primary: true });
+                  }
+                }}
+              >
                 {imagePreview ? (
                   <img
                     src={imagePreview}
                     alt="Product"
                     className="w-full h-full object-cover"
                   />
+                ) : product?.images && product.images.length > 0 ? (
+                  <>
+                    <img
+                      src={resolveImageUrl(product.images[0].image_url)}
+                      alt="Product"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                      <Maximize2 className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  </>
+                ) : product?.image_url ? (
+                  <>
+                    <img
+                      src={resolveImageUrl(product.image_url)}
+                      alt="Product"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                      <Maximize2 className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  </>
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-neutral-400">
                     <Package className="w-16 h-16" />
                   </div>
                 )}
               </div>
+              
+              {/* Image Gallery Thumbnails */}
+              {product?.images && product.images.length > 0 && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    All Product Images ({product.images.length})
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {product.images.map((img, index) => (
+                      <div key={img.id} className="relative aspect-square bg-neutral-100 rounded overflow-hidden border-2 border-neutral-300 group cursor-pointer">
+                        <img
+                          src={resolveImageUrl(img.image_url)}
+                          alt={`Product image ${index + 1}`}
+                          className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                          onClick={() => handleImageClick(img)}
+                        />
+                        {img.is_primary && (
+                          <div className="absolute top-1 left-1 bg-green-600 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+                            <Star className="w-3 h-3 fill-current" />
+                            Primary
+                          </div>
+                        )}
+                        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleImageClick(img);
+                            }}
+                            className="bg-black/50 hover:bg-black/70 text-white p-1 rounded"
+                            title="View full size"
+                          >
+                            <Maximize2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex gap-1">
+                            {!img.is_primary && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSetPrimary(img.id);
+                                }}
+                                disabled={updatingPrimary}
+                                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-2 py-1 rounded text-xs"
+                                title="Set as primary"
+                              >
+                                Set Primary
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteImage(img.id);
+                              }}
+                              className="flex-1 bg-red-600 hover:bg-red-700 px-2 py-1 rounded text-xs"
+                              title="Delete image"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
               <input
                 type="file"
                 accept="image/*"
@@ -495,19 +658,57 @@ export default function AdminProductDetail() {
                     className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Stock Quantity *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formData.stock}
+                    onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700 mb-2">
+                    Low Stock Threshold
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formData.low_stock_threshold}
+                    onChange={(e) => setFormData({ ...formData, low_stock_threshold: e.target.value })}
+                    className="w-full px-4 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                  />
+                  <p className="text-xs text-neutral-500 mt-1">Alert when stock falls below this number</p>
+                </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-neutral-700 mb-2">
                   Status
                 </label>
-                <span className={`px-3 py-1 text-sm rounded ${
-                  product.verification_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                  product.verification_status === 'Approved' ? 'bg-green-100 text-green-700' :
-                  'bg-red-100 text-red-700'
-                }`}>
-                  {product.verification_status}
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className={`px-3 py-1 text-sm rounded ${
+                    product.verification_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                    product.verification_status === 'Approved' ? 'bg-green-100 text-green-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {product.verification_status}
+                  </span>
+                  {product.status && (
+                    <span className={`px-3 py-1 text-sm rounded ${
+                      product.status === 'OUT_OF_STOCK' ? 'bg-red-100 text-red-700' :
+                      product.status === 'LOW_STOCK' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-green-100 text-green-700'
+                    }`}>
+                      Stock: {product.status.replace('_', ' ')}
+                      {product.stock !== undefined && ` (${product.stock} units)`}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {product.seller && (
@@ -754,6 +955,107 @@ export default function AdminProductDetail() {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Size Image Modal */}
+      {selectedImageModal && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedImageModal(null)}
+        >
+          <div className="relative max-w-7xl max-h-full w-full h-full flex items-center justify-center">
+            {/* Close Button */}
+            <button
+              onClick={() => setSelectedImageModal(null)}
+              className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white p-2 rounded-full transition-colors z-10"
+              title="Close (ESC)"
+            >
+              <X className="w-6 h-6" />
+            </button>
+
+            {/* Image */}
+            <img
+              src={resolveImageUrl(selectedImageModal.image_url)}
+              alt="Product image full size"
+              className="max-w-full max-h-full object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+
+            {/* Image Info and Actions */}
+            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/70 text-white px-6 py-4 rounded-lg flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                {selectedImageModal.is_primary && (
+                  <div className="flex items-center gap-1 bg-green-600 px-2 py-1 rounded text-xs">
+                    <Star className="w-3 h-3 fill-current" />
+                    Primary Image
+                  </div>
+                )}
+                <span className="text-sm">
+                  Image {product?.images?.findIndex(img => img.id === selectedImageModal.id) + 1} of {product?.images?.length}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                {!selectedImageModal.is_primary && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSetPrimary(selectedImageModal.id);
+                      setSelectedImageModal(null);
+                    }}
+                    disabled={updatingPrimary}
+                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
+                  >
+                    <Star className="w-4 h-4" />
+                    Set as Primary
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm('Are you sure you want to delete this image?')) {
+                      handleDeleteImage(selectedImageModal.id);
+                      setSelectedImageModal(null);
+                    }
+                  }}
+                  className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              </div>
+            </div>
+
+            {/* Navigation Arrows */}
+            {product?.images && product.images.length > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const currentIndex = product.images.findIndex(img => img.id === selectedImageModal.id);
+                    const prevIndex = currentIndex > 0 ? currentIndex - 1 : product.images.length - 1;
+                    setSelectedImageModal(product.images[prevIndex]);
+                  }}
+                  className="absolute left-4 top-1/2 transform -translate-y-1/2 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
+                  title="Previous image (←)"
+                >
+                  <ChevronLeft className="w-6 h-6" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const currentIndex = product.images.findIndex(img => img.id === selectedImageModal.id);
+                    const nextIndex = currentIndex < product.images.length - 1 ? currentIndex + 1 : 0;
+                    setSelectedImageModal(product.images[nextIndex]);
+                  }}
+                  className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
+                  title="Next image (→)"
+                >
+                  <ChevronRight className="w-6 h-6" />
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

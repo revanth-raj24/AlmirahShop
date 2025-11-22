@@ -33,7 +33,14 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
     }
   };
 
-  const imageUrl = resolveImageUrl(product.image_url);
+  // Get images from product.images array or fallback to image_url
+  const primaryImage = product.images && product.images.length > 0 
+    ? resolveImageUrl(product.images[0].image_url)
+    : resolveImageUrl(product.image_url);
+  const secondaryImage = product.images && product.images.length > 1
+    ? resolveImageUrl(product.images[1].image_url)
+    : primaryImage; // Fallback to primary if no secondary
+  
   const description = product.description || '';
 
   return (
@@ -42,11 +49,18 @@ export default function ProductCard({ product, onAddToCart, onToggleWishlist, is
         className="relative overflow-hidden bg-neutral-100 aspect-[3/4] mb-4 cursor-pointer"
         onClick={() => navigate(`/product/${product.id}`)}
       >
-        <img
-          src={imageUrl}
-          alt={product.name}
-          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-        />
+        <div className="relative w-full h-full">
+          <img
+            src={primaryImage}
+            alt={product.name}
+            className="w-full h-full object-cover transition-opacity duration-500 group-hover:opacity-0 absolute inset-0"
+          />
+          <img
+            src={secondaryImage}
+            alt={product.name}
+            className="w-full h-full object-cover transition-opacity duration-500 opacity-0 group-hover:opacity-100 absolute inset-0"
+          />
+        </div>
 
         <div className="absolute top-4 right-4 flex flex-col gap-2" onClick={e => e.stopPropagation()}>
           {onToggleWishlist && (

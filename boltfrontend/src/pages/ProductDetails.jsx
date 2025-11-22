@@ -18,7 +18,7 @@ export default function ProductDetails() {
   const [wishlistLoading, setWishlistLoading] = useState(false);
   const [selectedSize, setSelectedSize] = useState(null);
   const [selectedColor, setSelectedColor] = useState(null);
-  const [currentImage, setCurrentImage] = useState(null);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [reviews, setReviews] = useState([]);
   const [similarProducts, setSimilarProducts] = useState([]);
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -38,7 +38,8 @@ export default function ProductDetails() {
       try {
         const { data } = await API.get(`/products/${productId}`);
         setProduct(data);
-        setCurrentImage(data.image_url);
+        // Set initial image index to 0 (first image)
+        setCurrentImageIndex(0);
         setError(null);
         
         // Fetch stock information
@@ -188,11 +189,27 @@ export default function ProductDetails() {
 
   const handleColorSelect = (color) => {
     setSelectedColor(color);
-    // Update image if variant exists
+    // Update image if variant exists (legacy support)
     if (product?.variants && product.variants[color]) {
-      setCurrentImage(product.variants[color]);
+      // For legacy variants, we don't change the main image gallery
+      // The variant image is handled separately if needed
     }
   };
+
+  // Get product images array or fallback to image_url
+  const getProductImages = () => {
+    if (product?.images && product.images.length > 0) {
+      return product.images.map(img => resolveImageUrl(img.image_url));
+    }
+    // Fallback to image_url for backward compatibility
+    if (product?.image_url) {
+      return [resolveImageUrl(product.image_url)];
+    }
+    return [];
+  };
+
+  const productImages = getProductImages();
+  const currentImage = productImages[currentImageIndex] || productImages[0] || '';
 
   const handleSubmitReview = async () => {
     if (!user) {
@@ -325,13 +342,39 @@ export default function ProductDetails() {
   return (
     <div className="max-w-7xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mb-16">
-        {/* Product Image */}
-        <div className="bg-neutral-100 aspect-[3/4] flex items-center justify-center rounded-lg overflow-hidden">
-          <img
-            src={resolveImageUrl(currentImage || product.image_url)}
-            alt={product.name}
-            className="w-full h-full object-cover"
-          />
+        {/* Product Image Gallery */}
+        <div>
+          {/* Main Image */}
+          <div className="bg-neutral-100 aspect-[3/4] flex items-center justify-center rounded-lg overflow-hidden mb-4">
+            <img
+              src={currentImage}
+              alt={product.name}
+              className="w-full h-full object-cover"
+            />
+          </div>
+          
+          {/* Thumbnail Gallery */}
+          {productImages.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto">
+              {productImages.map((img, index) => (
+                <button
+                  key={index}
+                  onClick={() => setCurrentImageIndex(index)}
+                  className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-colors ${
+                    currentImageIndex === index
+                      ? 'border-neutral-900'
+                      : 'border-neutral-300 hover:border-neutral-600'
+                  }`}
+                >
+                  <img
+                    src={img}
+                    alt={`${product.name} - Image ${index + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Product Info */}
@@ -688,3 +731,4 @@ export default function ProductDetails() {
     </div>
   );
 }
+

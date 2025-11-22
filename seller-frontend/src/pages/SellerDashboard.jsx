@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogOut, Warehouse, AlertTriangle } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogOut, Warehouse, AlertTriangle, Maximize2, ChevronLeft, ChevronRight, X, Star } from 'lucide-react';
 import Button from '../components/Button';
 import Input from '../components/Input';
 import { resolveImageUrl } from '../utils/imageUtils';
@@ -31,12 +31,15 @@ export default function SellerDashboard() {
     size_fit: '',
     material_care: '',
     specifications: '',
+    stock: '0',
+    low_stock_threshold: '5',
   });
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [imagePreviews, setImagePreviews] = useState([]);
   const [existingImages, setExistingImages] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [bulkData, setBulkData] = useState('');
+  const [selectedImageModal, setSelectedImageModal] = useState(null); // { image_url, product, index }
 
   useEffect(() => {
     if (!user || user.role !== 'seller') {
@@ -166,36 +169,6 @@ export default function SellerDashboard() {
     setUploading(true);
     
     try {
-      let imageUrl = formData.image_url || null;
-      
-      // Upload new images if any
-      if (selectedFiles.length > 0) {
-        const formDataUpload = new FormData();
-        selectedFiles.forEach(file => {
-          formDataUpload.append('files', file);
-        });
-        
-        try {
-          const uploadResponse = await API.post('/seller/upload', formDataUpload, {
-            headers: {
-              'Content-Type': 'multipart/form-data',
-            },
-          });
-          
-          if (uploadResponse.data.urls && uploadResponse.data.urls.length > 0) {
-            // Use the first uploaded image as the main image
-            imageUrl = uploadResponse.data.urls[0];
-          }
-        } catch (uploadErr) {
-          alert(uploadErr?.response?.data?.detail || 'Failed to upload images');
-          setUploading(false);
-          return;
-        }
-      } else if (editingProduct && existingImages.length > 0 && !imageUrl) {
-        // If editing and no new images, use existing image
-        imageUrl = existingImages[0];
-      }
-
       // Parse sizes and colors - always return arrays (empty if no data)
       const sizesArray = formData.sizes && formData.sizes.trim() 
         ? formData.sizes.split(',').map(s => s.trim()).filter(s => s) 
@@ -222,34 +195,70 @@ export default function SellerDashboard() {
         }
       }
 
-      // Build payload - ensure all list/dict fields are never null
-      const payload = {
-        name: formData.name,
-        description: formData.description || null,
-        image_url: imageUrl,
-        price: parseFloat(formData.price),
-        discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : null,
-        gender: formData.gender || null,
-        category: formData.category || null,
-        sizes: sizesArray, // Always send array (empty if no data)
-        colors: colorsArray, // Always send array (empty if no data)
-        size_fit: formData.size_fit || null,
-        material_care: formData.material_care || null,
-        specifications: specificationsObj, // Always send object (empty if no data)
-      };
+      // Build FormData for product creation with images
+      const formDataToSend = new FormData();
+      formDataToSend.append('name', formData.name);
+      if (formData.description) formDataToSend.append('description', formData.description);
+      if (formData.price) formDataToSend.append('price', formData.price);
+      if (formData.discounted_price) formDataToSend.append('discounted_price', formData.discounted_price);
+      if (formData.gender) formDataToSend.append('gender', formData.gender);
+      if (formData.category) formDataToSend.append('category', formData.category);
+      if (sizesArray.length > 0) formDataToSend.append('sizes', JSON.stringify(sizesArray));
+      if (colorsArray.length > 0) formDataToSend.append('colors', JSON.stringify(colorsArray));
+      if (formData.size_fit) formDataToSend.append('size_fit', formData.size_fit);
+      if (formData.material_care) formDataToSend.append('material_care', formData.material_care);
+      if (Object.keys(specificationsObj).length > 0) formDataToSend.append('specifications', JSON.stringify(specificationsObj));
+      if (formData.stock) formDataToSend.append('stock', formData.stock);
+      if (formData.low_stock_threshold) formDataToSend.append('low_stock_threshold', formData.low_stock_threshold);
+      
+      // Add images if any
+      if (selectedFiles.length > 0) {
+        selectedFiles.forEach(file => {
+          formDataToSend.append('images', file);
+        });
+      } else if (editingProduct && existingImages.length > 0 && !formData.image_url) {
+        // Legacy: if editing and no new images, use existing image_url
+        formDataToSend.append('image_url', existingImages[0]);
+      } else if (formData.image_url) {
+        // Legacy: support old image_url field
+        formDataToSend.append('image_url', formData.image_url);
+      }
 
       // Log payload for debugging
-      console.log('Submitting product with payload:', {
-        ...payload,
+      console.log('Submitting product with images:', {
+        name: formData.name,
+        imageCount: selectedFiles.length,
         sizes: sizesArray,
         colors: colorsArray,
         specifications: specificationsObj
       });
 
       if (editingProduct) {
+        // For updates, still use JSON (backward compatibility)
+        const payload = {
+          name: formData.name,
+          description: formData.description || null,
+          image_url: formData.image_url || (existingImages.length > 0 ? existingImages[0] : null),
+          price: parseFloat(formData.price),
+          discounted_price: formData.discounted_price ? parseFloat(formData.discounted_price) : null,
+          gender: formData.gender || null,
+          category: formData.category || null,
+          sizes: sizesArray,
+          colors: colorsArray,
+          size_fit: formData.size_fit || null,
+          material_care: formData.material_care || null,
+          specifications: specificationsObj,
+          stock: formData.stock ? parseInt(formData.stock) : 0,
+          low_stock_threshold: formData.low_stock_threshold ? parseInt(formData.low_stock_threshold) : 5,
+        };
         await API.patch(`/seller/products/update/${editingProduct.id}`, payload);
       } else {
-        await API.post('/seller/products/create', payload);
+        // For new products, use FormData with images
+        await API.post('/seller/products/create', formDataToSend, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
       }
 
       setShowAddForm(false);
@@ -327,10 +336,20 @@ export default function SellerDashboard() {
       size_fit: product.size_fit || '',
       material_care: product.material_care || '',
       specifications: product.specifications ? JSON.stringify(product.specifications, null, 2) : '',
+      stock: product.stock?.toString() || '0',
+      low_stock_threshold: product.low_stock_threshold?.toString() || '5',
     });
     
-    // Set existing images for preview
-    if (product.image_url) {
+    // Set existing images for preview - use product.images array if available
+    if (product.images && product.images.length > 0) {
+      const existing = product.images.map(img => ({
+        url: resolveImageUrl(img.image_url),
+        isNew: false
+      }));
+      setExistingImages(product.images.map(img => img.image_url));
+      setImagePreviews(existing);
+    } else if (product.image_url) {
+      // Fallback to old image_url field
       const imageUrl = resolveImageUrl(product.image_url);
       const existing = [{ url: imageUrl, isNew: false }];
       setExistingImages([product.image_url]);
@@ -357,6 +376,8 @@ export default function SellerDashboard() {
       size_fit: '',
       material_care: '',
       specifications: '',
+      stock: '0',
+      low_stock_threshold: '5',
     });
     setSelectedFiles([]);
     setImagePreviews([]);
@@ -650,6 +671,34 @@ export default function SellerDashboard() {
                         placeholder='{"Fabric": "Cotton", "Fit": "Regular"}'
                       />
                     </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Stock Quantity *
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={formData.stock}
+                        onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        placeholder="0"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-neutral-700 mb-1">
+                        Low Stock Threshold
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={formData.low_stock_threshold}
+                        onChange={(e) => setFormData({ ...formData, low_stock_threshold: e.target.value })}
+                        className="w-full px-4 py-2 border border-neutral-300 focus:outline-none focus:border-neutral-900"
+                        placeholder="5"
+                      />
+                      <p className="text-xs text-neutral-500 mt-1">Alert when stock falls below this number</p>
+                    </div>
                   </div>
                   <div className="flex gap-3">
                     <Button type="submit" disabled={uploading}>
@@ -710,18 +759,84 @@ export default function SellerDashboard() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {products.map((product) => {
-                const imageUrl = resolveImageUrl(product.image_url);
+                // Use images array if available, fallback to image_url
+                const imageUrl = product.images && product.images.length > 0
+                  ? resolveImageUrl(product.images[0].image_url)
+                  : resolveImageUrl(product.image_url);
                 return (
                 <div key={product.id} className="bg-white border border-neutral-300 p-4">
-                  <div className="aspect-[3/4] bg-neutral-100 mb-4 overflow-hidden">
+                  <div 
+                    className="aspect-[3/4] bg-neutral-100 mb-4 overflow-hidden cursor-pointer group relative"
+                    onClick={() => {
+                      if (product.images && product.images.length > 0) {
+                        setSelectedImageModal({
+                          image_url: product.images[0].image_url,
+                          product: product,
+                          index: 0
+                        });
+                      } else if (product.image_url) {
+                        setSelectedImageModal({
+                          image_url: product.image_url,
+                          product: product,
+                          index: 0
+                        });
+                      }
+                    }}
+                  >
                     {imageUrl ? (
-                      <img src={imageUrl} alt={product.name} className="w-full h-full object-cover" />
+                      <>
+                        <img 
+                          src={imageUrl} 
+                          alt={product.name} 
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" 
+                        />
+                        {product.images && product.images.length > 0 && (
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                            <Maximize2 className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-neutral-400">
                         No Image
                       </div>
                     )}
                   </div>
+                  {/* Image Gallery Thumbnails */}
+                  {product.images && product.images.length > 1 && (
+                    <div className="grid grid-cols-4 gap-2 mb-4">
+                      {product.images.slice(0, 4).map((img, idx) => (
+                        <div
+                          key={img.id || idx}
+                          className="relative aspect-square bg-neutral-100 rounded overflow-hidden border-2 border-neutral-300 cursor-pointer group hover:border-neutral-900 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedImageModal({
+                              image_url: img.image_url,
+                              product: product,
+                              index: idx
+                            });
+                          }}
+                        >
+                          <img
+                            src={resolveImageUrl(img.image_url)}
+                            alt={`${product.name} ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                          {img.is_primary && (
+                            <div className="absolute top-1 left-1 bg-green-600 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <Star className="w-3 h-3 fill-current" />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {product.images.length > 4 && (
+                        <div className="aspect-square bg-neutral-200 rounded flex items-center justify-center text-xs text-neutral-600">
+                          +{product.images.length - 4}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <h3 className="font-serif text-lg mb-2">{product.name}</h3>
                   <p className="text-sm text-neutral-600 mb-2">₹{product.price}</p>
                   <div className="flex flex-col gap-2 mb-4">
@@ -867,6 +982,97 @@ export default function SellerDashboard() {
           </div>
         )}
       </div>
+
+      {/* Full Size Image Modal */}
+      {selectedImageModal && selectedImageModal.product && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedImageModal(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setSelectedImageModal(null);
+          }}
+          tabIndex={-1}
+        >
+          <div className="relative max-w-7xl max-h-full w-full h-full flex items-center justify-center">
+            {/* Close Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedImageModal(null);
+              }}
+              className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white p-2 rounded-full transition-colors z-10"
+              title="Close (ESC)"
+            >
+              <X className="w-6 h-6" />
+            </button>
+
+            {/* Image */}
+            <img
+              src={resolveImageUrl(selectedImageModal.image_url)}
+              alt={`${selectedImageModal.product.name} - Image ${selectedImageModal.index + 1}`}
+              className="max-w-full max-h-full object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+
+            {/* Image Info */}
+            {selectedImageModal.product.images && selectedImageModal.product.images.length > 1 && (
+              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/70 text-white px-6 py-4 rounded-lg">
+                <div className="flex items-center gap-2">
+                  {selectedImageModal.product.images[selectedImageModal.index]?.is_primary && (
+                    <div className="flex items-center gap-1 bg-green-600 px-2 py-1 rounded text-xs">
+                      <Star className="w-3 h-3 fill-current" />
+                      Primary Image
+                    </div>
+                  )}
+                  <span className="text-sm">
+                    Image {selectedImageModal.index + 1} of {selectedImageModal.product.images.length}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Navigation Arrows */}
+            {selectedImageModal.product.images && selectedImageModal.product.images.length > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const prevIndex = selectedImageModal.index > 0 
+                      ? selectedImageModal.index - 1 
+                      : selectedImageModal.product.images.length - 1;
+                    setSelectedImageModal({
+                      ...selectedImageModal,
+                      image_url: selectedImageModal.product.images[prevIndex].image_url,
+                      index: prevIndex
+                    });
+                  }}
+                  className="absolute left-4 top-1/2 transform -translate-y-1/2 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
+                  title="Previous image (←)"
+                >
+                  <ChevronLeft className="w-6 h-6" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const nextIndex = selectedImageModal.index < selectedImageModal.product.images.length - 1 
+                      ? selectedImageModal.index + 1 
+                      : 0;
+                    setSelectedImageModal({
+                      ...selectedImageModal,
+                      image_url: selectedImageModal.product.images[nextIndex].image_url,
+                      index: nextIndex
+                    });
+                  }}
+                  className="absolute right-4 top-1/2 transform -translate-y-1/2 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
+                  title="Next image (→)"
+                >
+                  <ChevronRight className="w-6 h-6" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

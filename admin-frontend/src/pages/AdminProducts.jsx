@@ -165,17 +165,25 @@ export default function AdminProducts() {
                     <tr key={product.id} className="hover:bg-neutral-50">
                       <td className="px-6 py-4">
                         <div className="w-16 h-16 bg-neutral-100 rounded overflow-hidden">
-                          {product.image_url ? (
-                            <img
-                              src={resolveImageUrl(product.image_url)}
-                              alt={product.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-neutral-400">
-                              <Package className="w-6 h-6" />
-                            </div>
-                          )}
+                          {(() => {
+                            // Use images array if available, fallback to image_url
+                            const imageUrl = product.images && product.images.length > 0
+                              ? resolveImageUrl(product.images[0].image_url)
+                              : product.image_url
+                                ? resolveImageUrl(product.image_url)
+                                : null;
+                            return imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={product.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-neutral-400">
+                                <Package className="w-6 h-6" />
+                              </div>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -195,6 +203,26 @@ export default function AdminProducts() {
                         <div className="text-sm text-neutral-600 capitalize">
                           {product.gender || 'N/A'}
                         </div>
+                        {product.stock !== undefined && (
+                          <div className="text-xs mt-1">
+                            <span className={`font-medium ${
+                              product.status === 'OUT_OF_STOCK' ? 'text-red-600' :
+                              product.status === 'LOW_STOCK' ? 'text-yellow-600' :
+                              'text-green-600'
+                            }`}>
+                              {product.stock} units
+                            </span>
+                            {product.status && (
+                              <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
+                                product.status === 'OUT_OF_STOCK' ? 'bg-red-100 text-red-700' :
+                                product.status === 'LOW_STOCK' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-green-100 text-green-700'
+                              }`}>
+                                {product.status.replace('_', ' ')}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-medium text-neutral-900">

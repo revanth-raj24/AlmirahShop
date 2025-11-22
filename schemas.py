@@ -17,6 +17,8 @@ class ProductBase(BaseModel):
     size_fit: str | None = None
     material_care: str | None = None
     specifications: Dict[str, Any] = {}  # {"Fabric": "Cotton", "Fit": "Regular"} - default to empty dict, validator converts None to {}
+    stock: int = 0  # Stock quantity for products without variants
+    low_stock_threshold: int = 5  # Threshold for low stock alerts
     
     @model_validator(mode='before')
     @classmethod
@@ -73,6 +75,7 @@ class Product(BaseModel):
     stock: int | None = None  # Stock quantity for products without variants
     low_stock_threshold: int | None = None  # Threshold for low stock alerts
     status: str | None = None  # "IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"
+    images: List["ProductImageResponse"] = []  # Product images array
 
     class Config:
         from_attributes = True
@@ -417,6 +420,7 @@ class AdminProductResponse(BaseModel):
     verification_status: str | None = None
     seller: SellerInfo | None = None
     variants: List["VariantResponse"] = []
+    images: List["ProductImageResponse"] = []  # Product images array
 
     class Config:
         from_attributes = True
@@ -430,6 +434,8 @@ class ProductUpdate(BaseModel):
     discounted_price: Optional[float] = None
     gender: Optional[Literal['men','women','unisex']] = None
     category: Optional[str] = None
+    stock: Optional[int] = None
+    low_stock_threshold: Optional[int] = None
     
     @model_validator(mode='before')
     @classmethod
@@ -519,6 +525,18 @@ class ReviewResponse(BaseModel):
 class ProductDetailResponse(Product):
     """Extended product response with reviews"""
     reviews: List[ReviewResponse] = []
+
+# Product Image Schemas
+class ProductImageResponse(BaseModel):
+    """Product image response"""
+    id: int
+    product_id: int
+    image_url: str
+    is_primary: bool
+    created_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
 
 # Product Variant Schemas
 class VariantCreate(BaseModel):
