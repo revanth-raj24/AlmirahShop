@@ -24,9 +24,18 @@ function AnimatedCounter({ value, duration = 1000 }) {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
+    // Handle null/undefined/NaN values
+    const safeValue = typeof value === 'number' && !isNaN(value) ? value : 0;
+    
     let startTime = null;
     const startValue = 0;
-    const endValue = typeof value === 'number' ? value : parseFloat(value) || 0;
+    const endValue = safeValue;
+
+    // If value is 0 or very small, set immediately
+    if (endValue === 0 || endValue < 1) {
+      setCount(endValue);
+      return;
+    }
 
     const animate = (currentTime) => {
       if (!startTime) startTime = currentTime;
@@ -43,14 +52,18 @@ function AnimatedCounter({ value, duration = 1000 }) {
     requestAnimationFrame(animate);
   }, [value, duration]);
 
-  if (typeof value === 'number' && value % 1 !== 0) {
-    return value.toFixed(2);
-  }
-  return count.toLocaleString();
+  // Format the display value
+  const displayValue = typeof value === 'number' && value % 1 !== 0 
+    ? value.toFixed(2) 
+    : count;
+  
+  return typeof displayValue === 'number' 
+    ? displayValue.toLocaleString('en-IN') 
+    : displayValue;
 }
 
 // KPI Card Component
-function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) {
+function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue', onClick, clickable = true }) {
   const colorClasses = {
     blue: 'bg-blue-50 border-blue-200 text-blue-700',
     green: 'bg-green-50 border-green-200 text-green-700',
@@ -60,13 +73,48 @@ function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) 
     indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
   };
 
+  // Safely handle value - default to 0 if null/undefined
+  const safeValue = value !== null && value !== undefined ? value : 0;
+  
+  // Format value for display
+  const formatValue = () => {
+    // If value is already a formatted string (starts with ₹), return as-is
+    if (typeof safeValue === 'string' && safeValue.startsWith('₹')) {
+      return safeValue;
+    }
+    // If value is a number, use AnimatedCounter
+    if (typeof safeValue === 'number') {
+      return <AnimatedCounter value={safeValue} />;
+    }
+    // Fallback: try to convert to number or return as string
+    const numValue = typeof safeValue === 'string' ? parseFloat(safeValue) || 0 : safeValue;
+    return <AnimatedCounter value={numValue} />;
+  };
+
+  const baseClasses = `bg-white border-2 rounded-lg p-6 shadow-sm transition-all duration-200 ${colorClasses[color]}`;
+  const hoverClasses = clickable && onClick 
+    ? 'hover:shadow-lg hover:scale-[1.02] hover:border-opacity-80 cursor-pointer active:scale-[0.98] group' 
+    : '';
+  const combinedClasses = `${baseClasses} ${hoverClasses}`;
+
   return (
-    <div className={`bg-white border-2 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow ${colorClasses[color]}`}>
+    <div 
+      className={combinedClasses}
+      onClick={clickable && onClick ? onClick : undefined}
+      role={clickable && onClick ? 'button' : undefined}
+      tabIndex={clickable && onClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (clickable && onClick && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+    >
       <div className="flex items-center justify-between mb-4">
-        <div className={`p-3 rounded-lg ${colorClasses[color].replace('50', '100')}`}>
-          <Icon className="w-6 h-6" />
+        <div className={`p-3 rounded-lg transition-transform duration-200 ${clickable && onClick ? 'group-hover:scale-110' : ''} ${colorClasses[color].replace('50', '100')}`}>
+          <Icon className={`w-6 h-6 transition-transform duration-200 ${clickable && onClick ? 'group-hover:scale-110' : ''}`} />
         </div>
-        {trend && (
+        {trend !== null && trend !== undefined && (
           <div className={`flex items-center gap-1 text-sm ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
             {trend > 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
             <span>{Math.abs(trend)}%</span>
@@ -75,16 +123,17 @@ function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) 
       </div>
       <h3 className="text-sm font-medium text-neutral-600 mb-1">{title}</h3>
       <p className="text-3xl font-bold text-neutral-900">
-        {typeof value === 'number' && value < 1000 ? (
-          <AnimatedCounter value={value} />
-        ) : typeof value === 'string' && value.startsWith('₹') ? (
-          `₹${parseFloat(value.slice(1)).toLocaleString()}`
-        ) : (
-          <AnimatedCounter value={value} />
-        )}
+        {formatValue()}
       </p>
       {subtitle && (
         <p className="text-xs text-neutral-500 mt-2">{subtitle}</p>
+      )}
+      {clickable && onClick && (
+        <div className="mt-4 pt-3 border-t border-current border-opacity-20">
+          <p className="text-xs font-medium opacity-70 group-hover:opacity-100 transition-opacity">
+            Click to view details →
+          </p>
+        </div>
       )}
     </div>
   );
@@ -205,23 +254,60 @@ export default function AdminDashboard() {
           topProductsRes,
           returnStatsRes,
           platformHealthRes
-        ] = await Promise.all([
-          fetchKPIs().catch(e => ({ data: null, error: e })),
-          fetchOrdersTrend(30).catch(e => ({ data: [], error: e })),
-          fetchCategorySales().catch(e => ({ data: [], error: e })),
-          fetchTopSellers(10).catch(e => ({ data: [], error: e })),
-          fetchTopProducts(10).catch(e => ({ data: [], error: e })),
-          fetchReturnStats(30).catch(e => ({ data: null, error: e })),
-          fetchPlatformHealth().catch(e => ({ data: null, error: e }))
+        ] = await Promise.allSettled([
+          fetchKPIs(),
+          fetchOrdersTrend(30),
+          fetchCategorySales(),
+          fetchTopSellers(10),
+          fetchTopProducts(10),
+          fetchReturnStats(30),
+          fetchPlatformHealth()
         ]);
 
-        if (kpisRes.data) setKpis(kpisRes.data);
-        if (ordersTrendRes.data) setOrdersTrend(ordersTrendRes.data);
-        if (categorySalesRes.data) setCategorySales(categorySalesRes.data);
-        if (topSellersRes.data) setTopSellers(topSellersRes.data);
-        if (topProductsRes.data) setTopProducts(topProductsRes.data);
-        if (returnStatsRes.data) setReturnStats(returnStatsRes.data);
-        if (platformHealthRes.data) setPlatformHealth(platformHealthRes.data);
+        // Handle KPIs response
+        if (kpisRes.status === 'fulfilled' && kpisRes.value?.data) {
+          setKpis(kpisRes.value.data);
+        } else {
+          console.error('Failed to fetch KPIs:', kpisRes.reason || kpisRes);
+          setError('Failed to load KPI data. Please refresh the page.');
+        }
+
+        // Handle other responses with error logging
+        if (ordersTrendRes.status === 'fulfilled' && ordersTrendRes.value?.data) {
+          setOrdersTrend(ordersTrendRes.value.data);
+        } else if (ordersTrendRes.status === 'rejected') {
+          console.error('Failed to fetch orders trend:', ordersTrendRes.reason);
+        }
+        
+        if (categorySalesRes.status === 'fulfilled' && categorySalesRes.value?.data) {
+          setCategorySales(categorySalesRes.value.data);
+        } else if (categorySalesRes.status === 'rejected') {
+          console.error('Failed to fetch category sales:', categorySalesRes.reason);
+        }
+        
+        if (topSellersRes.status === 'fulfilled' && topSellersRes.value?.data) {
+          setTopSellers(topSellersRes.value.data);
+        } else if (topSellersRes.status === 'rejected') {
+          console.error('Failed to fetch top sellers:', topSellersRes.reason);
+        }
+        
+        if (topProductsRes.status === 'fulfilled' && topProductsRes.value?.data) {
+          setTopProducts(topProductsRes.value.data);
+        } else if (topProductsRes.status === 'rejected') {
+          console.error('Failed to fetch top products:', topProductsRes.reason);
+        }
+        
+        if (returnStatsRes.status === 'fulfilled' && returnStatsRes.value?.data) {
+          setReturnStats(returnStatsRes.value.data);
+        } else if (returnStatsRes.status === 'rejected') {
+          console.error('Failed to fetch return stats:', returnStatsRes.reason);
+        }
+        
+        if (platformHealthRes.status === 'fulfilled' && platformHealthRes.value?.data) {
+          setPlatformHealth(platformHealthRes.value.data);
+        } else if (platformHealthRes.status === 'rejected') {
+          console.error('Failed to fetch platform health:', platformHealthRes.reason);
+        }
       } else if (activeTab === 'sellers') {
         const { data } = await API.get('/admin/sellers');
         setSellers(data || []);
@@ -392,7 +478,18 @@ export default function AdminDashboard() {
 
             {/* KPI Cards - Row 1: Platform Overview */}
             <div>
-              <h2 className="text-xl font-serif text-neutral-900 mb-4">Platform Overview</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-serif text-neutral-900">Platform Overview</h2>
+                {!loading && (
+                  <button
+                    onClick={() => fetchAllData()}
+                    className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg hover:bg-neutral-50"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Refresh
+                  </button>
+                )}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 {loading ? (
                   <>
@@ -405,34 +502,42 @@ export default function AdminDashboard() {
                   <>
                     <KPICard
                       title="Total Users"
-                      value={kpis.total_users}
+                      value={kpis.total_users ?? 0}
                       icon={Users}
-                      subtitle={`${kpis.total_sellers} sellers, ${kpis.total_users - kpis.total_sellers} customers`}
+                      subtitle={`${kpis.total_sellers ?? 0} sellers, ${Math.max(0, (kpis.total_users ?? 0) - (kpis.total_sellers ?? 0))} customers`}
                       color="blue"
+                      onClick={() => navigate('/admin/users')}
                     />
                     <KPICard
                       title="Total Sellers"
-                      value={kpis.total_sellers}
+                      value={kpis.total_sellers ?? 0}
                       icon={UserCheck}
-                      subtitle={`${kpis.total_verified_sellers} verified`}
+                      subtitle={`${kpis.total_verified_sellers ?? 0} verified`}
                       color="indigo"
+                      onClick={() => navigate('/admin/sellers')}
                     />
                     <KPICard
                       title="Pending Approvals"
-                      value={kpis.pending_seller_approvals}
+                      value={kpis.pending_seller_approvals ?? 0}
                       icon={Clock}
                       subtitle="Sellers awaiting approval"
                       color="yellow"
+                      onClick={() => navigate('/admin/sellers')}
                     />
                     <KPICard
                       title="Verified Sellers"
-                      value={kpis.total_verified_sellers}
+                      value={kpis.total_verified_sellers ?? 0}
                       icon={CheckCircle}
                       subtitle="Active and verified"
                       color="green"
+                      onClick={() => navigate('/admin/sellers')}
                     />
                   </>
-                ) : null}
+                ) : (
+                  <div className="col-span-4 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
+                    <p>No KPI data available. Please try refreshing the page.</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -451,34 +556,42 @@ export default function AdminDashboard() {
                   <>
                     <KPICard
                       title="Total Products"
-                      value={kpis.total_products}
+                      value={kpis.total_products ?? 0}
                       icon={Package}
-                      subtitle={`${kpis.verified_products} verified`}
+                      subtitle={`${kpis.verified_products ?? 0} verified`}
                       color="blue"
+                      onClick={() => navigate('/admin/products')}
                     />
                     <KPICard
                       title="Verified Products"
-                      value={kpis.verified_products}
+                      value={kpis.verified_products ?? 0}
                       icon={PackageCheck}
                       subtitle="Ready for sale"
                       color="green"
+                      onClick={() => navigate('/admin/products')}
                     />
                     <KPICard
                       title="Pending Verifications"
-                      value={kpis.pending_product_verifications}
+                      value={kpis.pending_product_verifications ?? 0}
                       icon={AlertCircle}
                       subtitle="Awaiting review"
                       color="yellow"
+                      onClick={() => navigate('/admin/products/pending')}
                     />
                     <KPICard
                       title="OOS Rate"
-                      value={platformHealth?.out_of_stock_rate || 0}
+                      value={platformHealth?.out_of_stock_rate ?? 0}
                       icon={AlertTriangle}
                       subtitle="Out of stock products"
                       color="red"
+                      onClick={() => navigate('/admin/products')}
                     />
                   </>
-                ) : null}
+                ) : (
+                  <div className="col-span-4 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
+                    <p>No catalog data available.</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -497,34 +610,42 @@ export default function AdminDashboard() {
                   <>
                     <KPICard
                       title="Total Orders"
-                      value={kpis.total_orders}
+                      value={kpis.total_orders ?? 0}
                       icon={ShoppingBag}
                       subtitle="All time orders"
                       color="blue"
+                      onClick={() => setActiveTab('orders')}
                     />
                     <KPICard
                       title="Revenue"
-                      value={`₹${kpis.revenue_total.toLocaleString()}`}
+                      value={`₹${(kpis.revenue_total ?? 0).toLocaleString('en-IN')}`}
                       icon={DollarSign}
                       subtitle="Total revenue"
                       color="green"
+                      onClick={() => setActiveTab('orders')}
                     />
                     <KPICard
                       title="Avg Order Value"
-                      value={`₹${kpis.avg_order_value}`}
+                      value={`₹${(kpis.avg_order_value ?? 0).toFixed(2)}`}
                       icon={TrendingUp}
                       subtitle="Per order average"
                       color="purple"
+                      onClick={() => setActiveTab('orders')}
                     />
                     <KPICard
                       title="Today's Orders"
-                      value={kpis.daily_orders_today}
+                      value={kpis.daily_orders_today ?? 0}
                       icon={Activity}
                       subtitle="Orders today"
                       color="indigo"
+                      onClick={() => setActiveTab('orders')}
                     />
                   </>
-                ) : null}
+                ) : (
+                  <div className="col-span-4 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
+                    <p>No orders data available.</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -542,27 +663,34 @@ export default function AdminDashboard() {
                   <>
                     <KPICard
                       title="Total Returns"
-                      value={kpis.returns_requested}
+                      value={kpis.returns_requested ?? 0}
                       icon={RefreshCw}
                       subtitle="Returned orders"
                       color="red"
+                      onClick={() => navigate('/admin/returns')}
                     />
                     <KPICard
                       title="Return Rate"
-                      value={`${returnStats?.return_rate || 0}%`}
+                      value={`${returnStats?.return_rate ?? 0}%`}
                       icon={AlertTriangle}
                       subtitle="Return percentage"
                       color="yellow"
+                      onClick={() => navigate('/admin/returns')}
                     />
                     <KPICard
                       title="Cancellations"
-                      value={kpis.total_cancellations}
+                      value={kpis.total_cancellations ?? 0}
                       icon={XCircle}
                       subtitle="Cancelled orders"
                       color="red"
+                      onClick={() => setActiveTab('orders')}
                     />
                   </>
-                ) : null}
+                ) : (
+                  <div className="col-span-3 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
+                    <p>No returns data available.</p>
+                  </div>
+                )}
               </div>
             </div>
 
