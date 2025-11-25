@@ -93,10 +93,17 @@ export function AuthProvider({ children }) {
   };
 
   const signOut = async () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('username');
-    localStorage.removeItem('userRole');
-    setUser(null);
+    try {
+      await API.post('/users/logout'); // Call backend logout endpoint
+    } catch (err) {
+      console.error('Backend logout failed, proceeding with local logout:', err);
+      // Continue with local logout even if backend fails
+    } finally {
+      localStorage.removeItem('token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('userRole');
+      setUser(null);
+    }
   };
 
   const value = {

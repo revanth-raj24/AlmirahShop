@@ -11,6 +11,7 @@ import AdminProductVerification from './pages/AdminProductVerification';
 import AdminProductDetail from './pages/AdminProductDetail';
 import AdminProducts from './pages/AdminProducts';
 import AdminSellers from './pages/AdminSellers';
+import AdminOrders from './pages/AdminOrders';
 import AdminReturns from './pages/AdminReturns';
 import AdminReturnDetail from './pages/AdminReturnDetail';
 
@@ -93,6 +94,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AdminSellers />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/orders"
+        element={
+          <ProtectedRoute>
+            <AdminOrders />
           </ProtectedRoute>
         }
       />

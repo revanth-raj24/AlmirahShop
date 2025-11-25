@@ -1210,6 +1210,14 @@ def login_user(
         "is_approved": is_approved
     }
 
+@app.post("/users/logout", tags=["Auth"])
+def logout_user(current_user: str = Depends(get_current_user)):
+    """
+    Logout endpoint. Currently, it just validates the token.
+    For actual token invalidation (e.g., blacklisting), more complex logic would be needed.
+    """
+    return {"message": f"User {current_user} logged out successfully (token validated)."}
+
 @app.get("/seller/status", tags=["Seller"])
 def get_seller_status(
     db: Session = Depends(get_db),

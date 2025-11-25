@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { adminReturns } from '../services/adminReturns';
 import { resolveImageUrl } from '../utils/imageUtils';
-import { RotateCcw, Clock, CheckCircle, XCircle, Package, Truck } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { RotateCcw, Clock, CheckCircle, XCircle, Package, Truck, ArrowLeft, LogOut } from 'lucide-react';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All' },
@@ -16,6 +17,7 @@ const STATUS_OPTIONS = [
 
 export default function AdminReturns() {
   const navigate = useNavigate();
+  const { signOut } = useAuth();
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -107,6 +109,25 @@ export default function AdminReturns() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-bold text-neutral-900">Return Management</h1>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
 
         <div className="mb-4 flex gap-4">

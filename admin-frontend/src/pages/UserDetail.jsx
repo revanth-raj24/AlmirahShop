@@ -4,14 +4,14 @@ import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowLeft, Trash2, User, Mail, Phone, Calendar, MapPin, Package,
-  RefreshCw, AlertTriangle, CheckCircle, XCircle, Eye, Building2, Home
+  RefreshCw, AlertTriangle, CheckCircle, XCircle, Eye, Building2, Home, LogOut
 } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function UserDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user: currentAdmin } = useAuth();
+  const { user: currentAdmin, signOut } = useAuth();
   const [userDetail, setUserDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -103,15 +103,34 @@ export default function UserDetail() {
               <p className="text-neutral-600">View and manage user account</p>
             </div>
           </div>
-          {!isOwnAccount && (
+          <div className="flex items-center gap-3">
+            {!isOwnAccount && (
+              <button
+                onClick={() => setShowDeleteDialog(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete User
+              </button>
+            )}
             <button
-              onClick={() => setShowDeleteDialog(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors"
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
             >
-              <Trash2 className="w-4 h-4" />
-              Delete User
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
             </button>
-          )}
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
 
         {/* Profile Card */}
