@@ -4,14 +4,14 @@ import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowLeft, Trash2, User, Mail, Phone, Calendar, MapPin, Package,
-  RefreshCw, AlertTriangle, CheckCircle, XCircle, Eye, Building2, Home
+  RefreshCw, AlertTriangle, CheckCircle, XCircle, Eye, Building2, Home, LogOut
 } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function UserDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user: currentAdmin } = useAuth();
+  const { user: currentAdmin, signOut } = useAuth();
   const [userDetail, setUserDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -98,6 +98,17 @@ export default function UserDetail() {
               <ArrowLeft className="w-5 h-5" />
               Back to Users
             </button>
+          </div>
+          <button
+            onClick={async () => {
+              await signOut();
+              navigate('/admin/login');
+            }}
+            className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign Out
+          </button>
             <div>
               <h1 className="font-serif text-4xl text-neutral-900 mb-2">User Details</h1>
               <p className="text-neutral-600">View and manage user account</p>

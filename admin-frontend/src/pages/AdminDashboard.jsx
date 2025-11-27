@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -50,7 +50,7 @@ function AnimatedCounter({ value, duration = 1000 }) {
 }
 
 // KPI Card Component
-function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) {
+function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue', onClick }) {
   const colorClasses = {
     blue: 'bg-blue-50 border-blue-200 text-blue-700',
     green: 'bg-green-50 border-green-200 text-green-700',
@@ -61,7 +61,10 @@ function KPICard({ title, value, icon: Icon, subtitle, trend, color = 'blue' }) 
   };
 
   return (
-    <div className={`bg-white border-2 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow ${colorClasses[color]}`}>
+    <div 
+      onClick={onClick}
+      className={`bg-white border-2 rounded-lg p-6 shadow-sm hover:shadow-md transition-all ${colorClasses[color]} ${onClick ? 'cursor-pointer hover:scale-[1.02] active:scale-[0.98]' : ''}`}
+    >
       <div className="flex items-center justify-between mb-4">
         <div className={`p-3 rounded-lg ${colorClasses[color].replace('50', '100')}`}>
           <Icon className="w-6 h-6" />
@@ -103,6 +106,7 @@ function SkeletonCard() {
 export default function AdminDashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sellers, setSellers] = useState([]);
   const [usersCount, setUsersCount] = useState(0);
   const [pendingProducts, setPendingProducts] = useState([]);
@@ -160,6 +164,14 @@ export default function AdminDashboard() {
   };
 
   const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'];
+
+  // Read tab from URL on mount and when URL changes
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam && ['stats', 'sellers', 'products', 'orders'].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!user || user.role !== 'admin') {
@@ -315,7 +327,10 @@ export default function AdminDashboard() {
         {/* Tabs */}
         <div className="flex gap-4 mb-8 border-b border-neutral-300 overflow-x-auto bg-white rounded-t-lg">
           <button
-            onClick={() => setActiveTab('stats')}
+            onClick={() => {
+              setActiveTab('stats');
+              setSearchParams({});
+            }}
             className={`px-6 py-3 font-medium transition-colors whitespace-nowrap ${
               activeTab === 'stats'
                 ? 'border-b-2 border-neutral-900 text-neutral-900'
@@ -354,7 +369,10 @@ export default function AdminDashboard() {
             </div>
           </button>
           <button
-            onClick={() => setActiveTab('orders')}
+            onClick={() => {
+              setActiveTab('orders');
+              setSearchParams({ tab: 'orders' });
+            }}
             className={`px-6 py-3 font-medium transition-colors whitespace-nowrap ${
               activeTab === 'orders'
                 ? 'border-b-2 border-neutral-900 text-neutral-900'
@@ -409,6 +427,7 @@ export default function AdminDashboard() {
                       icon={Users}
                       subtitle={`${kpis.total_sellers} sellers, ${kpis.total_users - kpis.total_sellers} customers`}
                       color="blue"
+                      onClick={() => navigate('/admin/users')}
                     />
                     <KPICard
                       title="Total Sellers"
@@ -416,6 +435,7 @@ export default function AdminDashboard() {
                       icon={UserCheck}
                       subtitle={`${kpis.total_verified_sellers} verified`}
                       color="indigo"
+                      onClick={() => navigate('/admin/sellers')}
                     />
                     <KPICard
                       title="Pending Approvals"
@@ -423,6 +443,7 @@ export default function AdminDashboard() {
                       icon={Clock}
                       subtitle="Sellers awaiting approval"
                       color="yellow"
+                      onClick={() => navigate('/admin/sellers?filter=pending')}
                     />
                     <KPICard
                       title="Verified Sellers"
@@ -430,6 +451,7 @@ export default function AdminDashboard() {
                       icon={CheckCircle}
                       subtitle="Active and verified"
                       color="green"
+                      onClick={() => navigate('/admin/sellers?filter=approved')}
                     />
                   </>
                 ) : null}
@@ -455,6 +477,7 @@ export default function AdminDashboard() {
                       icon={Package}
                       subtitle={`${kpis.verified_products} verified`}
                       color="blue"
+                      onClick={() => navigate('/admin/products')}
                     />
                     <KPICard
                       title="Verified Products"
@@ -462,6 +485,7 @@ export default function AdminDashboard() {
                       icon={PackageCheck}
                       subtitle="Ready for sale"
                       color="green"
+                      onClick={() => navigate('/admin/products?filter=Approved')}
                     />
                     <KPICard
                       title="Pending Verifications"
@@ -469,6 +493,7 @@ export default function AdminDashboard() {
                       icon={AlertCircle}
                       subtitle="Awaiting review"
                       color="yellow"
+                      onClick={() => navigate('/admin/products/pending')}
                     />
                     <KPICard
                       title="OOS Rate"
@@ -476,6 +501,7 @@ export default function AdminDashboard() {
                       icon={AlertTriangle}
                       subtitle="Out of stock products"
                       color="red"
+                      onClick={() => navigate('/admin/products')}
                     />
                   </>
                 ) : null}
@@ -501,6 +527,10 @@ export default function AdminDashboard() {
                       icon={ShoppingBag}
                       subtitle="All time orders"
                       color="blue"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setSearchParams({ tab: 'orders' });
+                      }}
                     />
                     <KPICard
                       title="Revenue"
@@ -508,6 +538,10 @@ export default function AdminDashboard() {
                       icon={DollarSign}
                       subtitle="Total revenue"
                       color="green"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setSearchParams({ tab: 'orders' });
+                      }}
                     />
                     <KPICard
                       title="Avg Order Value"
@@ -515,6 +549,10 @@ export default function AdminDashboard() {
                       icon={TrendingUp}
                       subtitle="Per order average"
                       color="purple"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setSearchParams({ tab: 'orders' });
+                      }}
                     />
                     <KPICard
                       title="Today's Orders"
@@ -522,6 +560,10 @@ export default function AdminDashboard() {
                       icon={Activity}
                       subtitle="Orders today"
                       color="indigo"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setSearchParams({ tab: 'orders' });
+                      }}
                     />
                   </>
                 ) : null}
