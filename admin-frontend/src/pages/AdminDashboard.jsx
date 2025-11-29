@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import AdminNotifications from '../components/AdminNotifications';
 import {
   CheckCircle, XCircle, Package, Users, AlertCircle, ShoppingCart, BarChart3,
   UserCheck, LogOut, Ban, Trash2, Eye, X, TrendingUp, DollarSign, ShoppingBag,
@@ -308,13 +309,16 @@ export default function AdminDashboard() {
             <h1 className="font-serif text-4xl text-neutral-900 mb-2">Admin Dashboard</h1>
             <p className="text-neutral-600">Welcome back, {user?.username}</p>
           </div>
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
-          >
-            <LogOut className="w-4 h-4" />
-            Sign Out
-          </button>
+          <div className="flex items-center gap-3">
+            <AdminNotifications />
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -477,6 +481,7 @@ export default function AdminDashboard() {
                       icon={Package}
                       subtitle={`${kpis.verified_products} verified`}
                       color="blue"
+                      onClick={() => navigate('/admin/products')}
                     />
                     <KPICard
                       title="Verified Products"
@@ -484,6 +489,7 @@ export default function AdminDashboard() {
                       icon={PackageCheck}
                       subtitle="Ready for sale"
                       color="green"
+                      onClick={() => navigate('/admin/products?filter=Approved')}
                     />
                     <KPICard
                       title="Pending Verifications"
@@ -491,6 +497,7 @@ export default function AdminDashboard() {
                       icon={AlertCircle}
                       subtitle="Awaiting review"
                       color="yellow"
+                      onClick={() => navigate('/admin/products/pending')}
                     />
                     <KPICard
                       title="OOS Rate"
@@ -498,6 +505,7 @@ export default function AdminDashboard() {
                       icon={AlertTriangle}
                       subtitle="Out of stock products"
                       color="red"
+                      onClick={() => navigate('/admin/products')}
                     />
                   </>
                 ) : null}
@@ -523,6 +531,16 @@ export default function AdminDashboard() {
                       icon={ShoppingBag}
                       subtitle="All time orders"
                       color="blue"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        // Scroll to orders section
+                        setTimeout(() => {
+                          const ordersSection = document.querySelector('[data-orders-section]');
+                          if (ordersSection) {
+                            ordersSection.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }, 100);
+                      }}
                     />
                     <KPICard
                       title="Revenue"
@@ -530,6 +548,15 @@ export default function AdminDashboard() {
                       icon={DollarSign}
                       subtitle="Total revenue"
                       color="green"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setTimeout(() => {
+                          const ordersSection = document.querySelector('[data-orders-section]');
+                          if (ordersSection) {
+                            ordersSection.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }, 100);
+                      }}
                     />
                     <KPICard
                       title="Avg Order Value"
@@ -537,6 +564,15 @@ export default function AdminDashboard() {
                       icon={TrendingUp}
                       subtitle="Per order average"
                       color="purple"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setTimeout(() => {
+                          const ordersSection = document.querySelector('[data-orders-section]');
+                          if (ordersSection) {
+                            ordersSection.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }, 100);
+                      }}
                     />
                     <KPICard
                       title="Today's Orders"
@@ -544,6 +580,15 @@ export default function AdminDashboard() {
                       icon={Activity}
                       subtitle="Orders today"
                       color="indigo"
+                      onClick={() => {
+                        setActiveTab('orders');
+                        setTimeout(() => {
+                          const ordersSection = document.querySelector('[data-orders-section]');
+                          if (ordersSection) {
+                            ordersSection.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }, 100);
+                      }}
                     />
                   </>
                 ) : null}
@@ -907,7 +952,7 @@ export default function AdminDashboard() {
 
         {/* Orders Tab */}
         {activeTab === 'orders' && (
-          <div className="bg-white border border-neutral-300 rounded-lg shadow-sm">
+          <div className="bg-white border border-neutral-300 rounded-lg shadow-sm" data-orders-section>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-neutral-100">

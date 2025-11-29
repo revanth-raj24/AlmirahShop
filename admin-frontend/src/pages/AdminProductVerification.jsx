@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { resolveImageUrl } from '../utils/imageUtils';
-import { Package, Eye, CheckCircle, XCircle, Clock, User, Mail, Phone } from 'lucide-react';
+import { Package, Eye, CheckCircle, XCircle, Clock, User, Mail, Phone, ArrowLeft, LogOut } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function AdminProductVerification() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -111,12 +111,25 @@ export default function AdminProductVerification() {
             <h1 className="font-serif text-4xl text-neutral-900 mb-2">Product Verification</h1>
             <p className="text-neutral-600">Review and approve seller-submitted products</p>
           </div>
-          <button
-            onClick={() => navigate('/admin/dashboard')}
-            className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
-          >
-            Back to Dashboard
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
 
         {error && (

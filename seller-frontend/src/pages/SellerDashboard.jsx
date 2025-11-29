@@ -6,6 +6,7 @@ import { Plus, Edit, Trash2, Package, ShoppingCart, BarChart3, CheckCircle, LogO
 import Button from '../components/Button';
 import Input from '../components/Input';
 import { resolveImageUrl } from '../utils/imageUtils';
+import SellerNotifications from '../components/seller/SellerNotifications';
 
 export default function SellerDashboard() {
   const { user, signOut } = useAuth();
@@ -423,6 +424,7 @@ export default function SellerDashboard() {
               <ShoppingCart className="w-4 h-4" />
               Manage Orders
             </button>
+            <SellerNotifications />
             <span className="text-sm text-neutral-600">Welcome, {user?.username}</span>
             <button
               onClick={handleSignOut}

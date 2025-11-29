@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AdminWSProvider } from './contexts/AdminWSContext';
 import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminOTPVerification from './pages/AdminOTPVerification';
@@ -14,6 +15,7 @@ import AdminSellers from './pages/AdminSellers';
 import AdminReturns from './pages/AdminReturns';
 import AdminReturnDetail from './pages/AdminReturnDetail';
 import AdminInventory from './pages/AdminInventory';
+import NotificationsPage from './pages/admin/NotificationsPage';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -121,6 +123,14 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/admin/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/" element={<Navigate to="/admin/login" replace />} />
       <Route path="*" element={<Navigate to="/admin/login" replace />} />
     </Routes>
@@ -131,9 +141,11 @@ function App() {
   return (
     <Router>
       <AuthProvider>
-        <div className="min-h-screen">
-          <AppRoutes />
-        </div>
+        <AdminWSProvider>
+          <div className="min-h-screen">
+            <AppRoutes />
+          </div>
+        </AdminWSProvider>
       </AuthProvider>
     </Router>
   );

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from database import Base, engine, SessionLocal
 from models import Product as ProductModel, User, Order, OrderItem, CartItem, WishlistItem, Address, Review, ProductVariant, ProductImage
+from app.models.notification import Notification
+from app.schemas.notification import NotificationCreate
+from app.realtime.websocket_manager import websocket_manager
+from app.routes.admin.notification_routes import router as notification_router
+from app.routes.seller.notification_routes import router as seller_notification_router
 from schemas import ProductCreate, Product as ProductSchema, ProductListResponse, BulkProductCreate, BulkProductCreateResponse, UserCreate, UserResponse, UserDetailResponse, CartItemCreate, CartItemResponse, CartItemQuantityUpdate, OrderResponse, OrderItemResponse, WishlistItemResponse, VerifyOTPRequest, ResendOTPRequest, SellerCreate, SellerResponse, ForgotPasswordRequest, ResetPasswordRequest, AddressCreate, AddressUpdate, AddressResponse, ProfileResponse, ProfileUpdate, ChangePasswordRequest, SellerOrderItemResponse, SellerOrderItemListResponse, RejectOrderItemRequest, OverrideOrderItemStatusRequest, ProductWithSellerInfo, RejectProductRequest, ReturnRequestCreate, ReturnRejectRequest, ReturnOverrideRequest, ReturnItemResponse, ReturnListResponse, ReviewCreate, ReviewResponse, ProductDetailResponse, VariantCreate, VariantUpdate, VariantResponse, AdminProductResponse, ProductUpdate, SellerInfo, StockUpdateRequest, VariantStockUpdateRequest, InventoryItemResponse, InventoryListResponse, StockInfoResponse
 from auth_utils import hash_password, verify_password, create_access_token, get_current_user, get_current_user_obj, admin_only, seller_only, customer_only, require_admin, require_seller, require_approved_seller, require_customer, validate_username, validate_password_strength
 from fastapi import Query
@@ -147,6 +152,10 @@ app.add_middleware(
 
 # Create all tables in DB
 Base.metadata.create_all(bind=engine)
+
+# Include notification routes
+app.include_router(notification_router)
+app.include_router(seller_notification_router)
 
 # Safe migration: Add new verification columns if they don't exist
 def migrate_verification_fields():
@@ -928,6 +937,11 @@ def create_product(
     db.commit()
     db.refresh(new_product)
     normalize_product_gender(new_product, db)
+    
+    # Send product approval notification
+    message = f"New product submitted for approval: {new_product.name} by seller ID {seller.id}"
+    create_notification_sync("approval", message, db, seller_id=seller.id, product_id=new_product.id)
+    
     return new_product
 
 # Get All Products
@@ -1085,6 +1099,87 @@ def normalize_product_gender(product, db: Session = None):
         # Return product as-is if normalization fails (better than crashing)
         return product
 
+def create_notification_sync(
+    notification_type: str,
+    message: str,
+    db: Session,
+    seller_id: int = None,
+    product_id: int = None,
+    order_id: int = None,
+    sku: str = None,
+    size: str = None,
+    color: str = None,
+    priority: str = "medium"
+):
+    """Helper function to create notification in DB (synchronous)"""
+    try:
+        # Create notification in database
+        notification = Notification(
+            type=notification_type,
+            message=message,
+            seller_id=seller_id,
+            product_id=product_id,
+            order_id=order_id,
+            sku=sku,
+            size=size,
+            color=color,
+            priority=priority
+        )
+        db.add(notification)
+        db.commit()
+        db.refresh(notification)
+        
+        # Broadcast to connected clients asynchronously (fire and forget)
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Schedule as background task
+                asyncio.create_task(broadcast_notification(notification))
+            else:
+                # Run in new event loop
+                asyncio.run(broadcast_notification(notification))
+        except RuntimeError:
+            # No event loop, create one
+            asyncio.run(broadcast_notification(notification))
+        
+        logger.info(f"Notification created: {notification_type} - {message}")
+        return notification
+    except Exception as e:
+        logger.error(f"Error creating notification: {e}")
+        db.rollback()
+        return None
+
+async def broadcast_notification(notification: Notification):
+    """Broadcast notification to WebSocket clients"""
+    notification_data = {
+        "type": "notification",
+        "data": {
+            "id": notification.id,
+            "type": notification.type,
+            "message": notification.message,
+            "seller_id": notification.seller_id,
+            "product_id": notification.product_id,
+            "order_id": notification.order_id,
+            "sku": notification.sku,
+            "size": notification.size,
+            "color": notification.color,
+            "is_read": notification.is_read,
+            "priority": notification.priority,
+            "created_at": notification.created_at.isoformat()
+        }
+    }
+    
+    try:
+        # Broadcast to admin if it's an admin notification
+        await websocket_manager.broadcast_to_admin(notification_data)
+        
+        # Broadcast to seller if seller_id is present
+        if notification.seller_id:
+            await websocket_manager.broadcast_to_seller(notification.seller_id, notification_data)
+    except Exception as e:
+        logger.error(f"Error broadcasting notification: {e}")
+
 def update_product_status(product: ProductModel, db: Session):
     """Update product status based on stock (for products without variants)"""
     if not product:
@@ -1092,6 +1187,8 @@ def update_product_status(product: ProductModel, db: Session):
     
     # Check if product has variants
     variants = db.query(ProductVariant).filter(ProductVariant.product_id == product.id).all()
+    
+    previous_status = product.status
     
     if variants:
         # Product has variants - calculate total stock from variants
@@ -1113,6 +1210,19 @@ def update_product_status(product: ProductModel, db: Session):
             product.status = "IN_STOCK"
     
     db.commit()
+    
+    # Send stock notification if status changed to OUT_OF_STOCK or LOW_STOCK
+    if product.status != previous_status and product.status in ["OUT_OF_STOCK", "LOW_STOCK"] and product.seller_id:
+        try:
+            if product.status == "OUT_OF_STOCK":
+                message = f"Out of Stock: {product.name} is now out of stock"
+                create_notification_sync("stock", message, db, seller_id=product.seller_id, product_id=product.id, priority="high")
+            elif product.status == "LOW_STOCK":
+                stock_value = sum(v.stock for v in variants if v.stock) if variants else product.stock
+                message = f"Low Stock Warning: {product.name} has low stock (≤{product.low_stock_threshold or 5} units) - {stock_value} remaining"
+                create_notification_sync("stock", message, db, seller_id=product.seller_id, product_id=product.id, priority="medium")
+        except Exception as e:
+            logger.error(f"Error creating stock notification: {e}")
 
 
 @app.get("/products/paginated", response_model=ProductListResponse, tags=["Products"])
@@ -1727,6 +1837,11 @@ def register_seller(seller: SellerCreate, db: Session = Depends(get_db)):
             logger.exception("Failed to send OTP email to %s: %s", seller.email, str(e))
 
         logger.info("Seller registration success: user_id=%s username=%s", new_seller.id, new_seller.username)
+        
+        # Send seller verification notification
+        message = f"New seller registration: {new_seller.username} ({new_seller.email})"
+        create_notification_sync("seller_verification", message, db, seller_id=new_seller.id)
+        
         return {"message": "Seller account created successfully. Please verify your email with the OTP sent to your inbox. Your account will be reviewed by an admin for approval."}
     except HTTPException:
         raise
@@ -2108,6 +2223,44 @@ def create_order(
         if item.variant_id:
             item.variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
     order.order_items = order_items
+    
+    # Send order notifications to sellers for each order item
+    # Group by seller to avoid duplicate notifications
+    seller_order_items = {}
+    for item in order_items:
+        if item.seller_id:
+            if item.seller_id not in seller_order_items:
+                seller_order_items[item.seller_id] = []
+            seller_order_items[item.seller_id].append(item)
+    
+    # Create notification for each seller
+    for seller_id, items in seller_order_items.items():
+        product_names = []
+        total_amount = 0
+        for item in items:
+            product_name = item.product.name if item.product else f"Product #{item.product_id}"
+            if item.variant_size or item.variant_color:
+                product_name += f" ({item.variant_size or ''} {item.variant_color or ''})".strip()
+            product_names.append(product_name)
+            total_amount += item.price * item.quantity
+        
+        message = f"New order received: Order #{order.id} - {', '.join(product_names[:3])}"
+        if len(product_names) > 3:
+            message += f" and {len(product_names) - 3} more"
+        message += f" - ₹{total_amount:.2f}"
+        
+        create_notification_sync(
+            "order", 
+            message, 
+            db, 
+            seller_id=seller_id,
+            order_id=order.id,
+            product_id=items[0].product_id if items else None,
+            sku=None,
+            size=items[0].variant_size if items and items[0].variant_size else None,
+            color=items[0].variant_color if items and items[0].variant_color else None,
+            priority="high"
+        )
     
     return order
 
@@ -4995,6 +5148,19 @@ def approve_product(
     db.commit()
     db.refresh(product)
     normalize_product_gender(product)
+    
+    # Send approval notification to seller
+    if product.seller_id:
+        message = f"Product Approved: {product.name} has been approved and is now live"
+        create_notification_sync(
+            "approval", 
+            message, 
+            db, 
+            seller_id=product.seller_id, 
+            product_id=product.id,
+            priority="medium"
+        )
+    
     return product
 
 @app.patch("/admin/products/{product_id}/reject", response_model=ProductSchema, tags=["Admin"])
@@ -5016,6 +5182,21 @@ def reject_product(
     db.commit()
     db.refresh(product)
     normalize_product_gender(product)
+    
+    # Send rejection notification to seller
+    if product.seller_id:
+        message = f"Product Rejected: {product.name} has been rejected"
+        if request.notes:
+            message += f" - {request.notes}"
+        create_notification_sync(
+            "approval", 
+            message, 
+            db, 
+            seller_id=product.seller_id, 
+            product_id=product.id,
+            priority="high"
+        )
+    
     return product
 
 # Legacy endpoint for backward compatibility
@@ -6347,6 +6528,128 @@ def get_user_profile_legacy(
         "has_address": user.has_address,
         "role": user.role
     }
+
+# WebSocket endpoint for admin notifications
+@app.websocket("/ws/admin")
+async def websocket_admin_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time admin notifications"""
+    await websocket_manager.connect_admin(websocket)
+    try:
+        # Verify admin authentication via token in query params or headers
+        token = websocket.query_params.get("token") or websocket.headers.get("Authorization", "").replace("Bearer ", "")
+        
+        if not token:
+            await websocket.close(code=1008, reason="Authentication required")
+            return
+        
+        # Verify token and check if user is admin
+        try:
+            from jose import jwt
+            from auth_utils import SECRET_KEY, ALGORITHM
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            username = payload.get("sub")
+            if not username:
+                await websocket.close(code=1008, reason="Invalid token")
+                return
+            
+            # Check if user is admin
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == username).first()
+                if not user or (not user.is_admin and user.role != "admin"):
+                    await websocket.close(code=1008, reason="Admin access required")
+                    return
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"WebSocket authentication error: {e}")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
+        
+        # Keep connection alive and listen for messages
+        while True:
+            try:
+                # Wait for any message from client (ping/pong or close)
+                data = await websocket.receive_text()
+                # Echo back or handle client messages if needed
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                break
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+    finally:
+        websocket_manager.disconnect(websocket)
+
+# WebSocket endpoint for seller notifications
+@app.websocket("/ws/seller/{seller_id}")
+async def websocket_seller_endpoint(websocket: WebSocket, seller_id: int):
+    """WebSocket endpoint for real-time seller notifications"""
+    try:
+        # Verify seller authentication via token in query params or headers
+        token = websocket.query_params.get("token") or websocket.headers.get("Authorization", "").replace("Bearer ", "")
+        
+        if not token:
+            await websocket.close(code=1008, reason="Authentication required")
+            return
+        
+        # Verify token and check if user is the seller
+        try:
+            from jose import jwt
+            from auth_utils import SECRET_KEY, ALGORITHM
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            username = payload.get("sub")
+            if not username:
+                await websocket.close(code=1008, reason="Invalid token")
+                return
+            
+            # Check if user is the seller
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == username).first()
+                if not user:
+                    await websocket.close(code=1008, reason="User not found")
+                    return
+                
+                # Verify user is seller and matches the seller_id
+                is_seller = (user.role == "seller" or user.is_seller == True)
+                if not is_seller:
+                    await websocket.close(code=1008, reason="Seller access required")
+                    return
+                
+                if user.id != seller_id:
+                    await websocket.close(code=1008, reason="Seller ID mismatch")
+                    return
+                
+                # Connect seller WebSocket
+                await websocket_manager.connect_seller(websocket, seller_id)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"WebSocket authentication error: {e}")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
+        
+        # Keep connection alive and listen for messages
+        while True:
+            try:
+                # Wait for any message from client (ping/pong or close)
+                data = await websocket.receive_text()
+                # Echo back or handle client messages if needed
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                break
+    except Exception as e:
+        logger.error(f"WebSocket connection error: {e}")
+    finally:
+        websocket_manager.disconnect(websocket)
 
 if __name__ == "__main__":
     import uvicorn

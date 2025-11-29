@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { adminReturns } from '../services/adminReturns';
 import { resolveImageUrl } from '../utils/imageUtils';
-import { RotateCcw, Clock, CheckCircle, XCircle, Package, Truck } from 'lucide-react';
+import { RotateCcw, Clock, CheckCircle, XCircle, Package, Truck, ArrowLeft, LogOut } from 'lucide-react';
 
 const ALLOWED_STATUSES = [
   'None',
@@ -14,9 +14,12 @@ const ALLOWED_STATUSES = [
   'RefundProcessed',
 ];
 
+import { useAuth } from '../contexts/AuthContext';
+
 export default function AdminReturnDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { signOut } = useAuth();
   const [returnItem, setReturnItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [overrideModal, setOverrideModal] = useState({ open: false, status: '', notes: '' });
@@ -133,12 +136,34 @@ export default function AdminReturnDetail() {
   return (
     <div className="min-h-screen py-8 px-4">
       <div className="max-w-4xl mx-auto">
-        <button
-          onClick={() => navigate('/admin/returns')}
-          className="mb-4 text-blue-600 hover:text-blue-900"
-        >
-          ← Back to Returns
-        </button>
+        <div className="flex items-center justify-between mb-6">
+          <button
+            onClick={() => navigate('/admin/returns')}
+            className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Returns
+          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
+        </div>
 
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between mb-6">

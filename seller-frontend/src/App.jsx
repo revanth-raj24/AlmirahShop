@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { SellerWSProvider } from './contexts/SellerWSContext';
 import SellerLogin from './pages/SellerLogin';
 import SellerRegister from './pages/SellerRegister';
 import SellerDashboard from './pages/SellerDashboard';
@@ -13,6 +14,7 @@ import SellerReturnDetail from './pages/SellerReturnDetail';
 import SellerVerificationPending from './pages/SellerVerificationPending';
 import SellerInventory from './pages/SellerInventory';
 import SellerLowStock from './pages/SellerLowStock';
+import NotificationsPage from './pages/seller/NotificationsPage';
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -135,6 +137,14 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/seller/dashboard/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/" element={<Navigate to="/seller/login" replace />} />
       <Route path="*" element={<Navigate to="/seller/login" replace />} />
     </Routes>
@@ -145,9 +155,11 @@ function App() {
   return (
     <Router>
       <AuthProvider>
-        <div className="min-h-screen">
-          <AppRoutes />
-        </div>
+        <SellerWSProvider>
+          <div className="min-h-screen">
+            <AppRoutes />
+          </div>
+        </SellerWSProvider>
       </AuthProvider>
     </Router>
   );

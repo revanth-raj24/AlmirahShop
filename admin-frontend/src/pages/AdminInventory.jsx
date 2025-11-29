@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Warehouse, AlertTriangle, Package, Edit, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
+import { Warehouse, AlertTriangle, Package, Edit, ChevronLeft, ChevronRight, Filter, ArrowLeft, LogOut } from 'lucide-react';
 import { resolveImageUrl } from '../utils/imageUtils';
 import Button from '../components/Button';
 import Input from '../components/Input';
 
 export default function AdminInventory() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [inventoryItems, setInventoryItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -119,16 +119,29 @@ export default function AdminInventory() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <button
-              onClick={() => navigate('/admin/dashboard')}
-              className="text-neutral-600 hover:text-neutral-900"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
             <div className="flex items-center gap-3">
               <Warehouse className="w-8 h-8 text-neutral-900" />
               <h1 className="font-serif text-4xl text-neutral-900">Inventory Management</h1>
             </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
           </div>
         </div>
 

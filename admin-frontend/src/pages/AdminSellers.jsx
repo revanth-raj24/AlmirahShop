@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { Users, CheckCircle, XCircle, AlertCircle, Ban, Eye, Filter, Search, Mail, Phone, Calendar } from 'lucide-react';
+import { Users, CheckCircle, XCircle, AlertCircle, Ban, Eye, Filter, Search, Mail, Phone, Calendar, ArrowLeft, LogOut } from 'lucide-react';
 import Button from '../components/Button';
 
 export default function AdminSellers() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sellers, setSellers] = useState([]);
@@ -179,12 +179,25 @@ export default function AdminSellers() {
             <h1 className="font-serif text-4xl text-neutral-900 mb-2">Seller Management</h1>
             <p className="text-neutral-600">Manage all seller accounts and approvals</p>
           </div>
-          <button
-            onClick={() => navigate('/admin/dashboard')}
-            className="px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
-          >
-            Back to Dashboard
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/admin/login');
+              }}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-neutral-600 hover:text-neutral-900 transition-colors bg-white border border-neutral-300 rounded-lg"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
 
         {error && (
