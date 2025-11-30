@@ -5,6 +5,18 @@ import ProductCard from '../components/ProductCard';
 import VideoProductCard from '../components/VideoProductCard';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 
+// Homepage Components
+import HeroBanner from '../components/homepage/HeroBanner';
+import CategoryCards from '../components/homepage/CategoryCards';
+import TrendingSection from '../components/homepage/TrendingSection';
+import OffersCarousel from '../components/homepage/OffersCarousel';
+import RecommendedProducts from '../components/homepage/RecommendedProducts';
+
+/**
+ * Home Page Component
+ * Enhanced homepage with hero, categories, trending, offers, and recommendations
+ * Preserves existing search and category filtering functionality
+ */
 export default function Home() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -22,13 +34,21 @@ export default function Home() {
     ? category.toLowerCase()
     : undefined;
 
+  // Determine if we should show the enhanced homepage or product listing
+  const showEnhancedHomepage = !searchQuery && !category;
+
   useEffect(() => {
     setPage(1); // reset to first page when filters change
   }, [category, searchQuery]);
 
   useEffect(() => {
-    fetchProducts();
-  }, [gender, searchQuery, page]);
+    // Only fetch products if we're not showing enhanced homepage
+    if (!showEnhancedHomepage) {
+      fetchProducts();
+    } else {
+      setLoading(false);
+    }
+  }, [gender, searchQuery, page, showEnhancedHomepage]);
 
   useEffect(() => {
     if (user && products.length > 0) {
@@ -131,6 +151,29 @@ export default function Home() {
 
   const videoProduct = null; // not available from backend
 
+  // Show enhanced homepage when no search or category filter
+  if (showEnhancedHomepage) {
+    return (
+      <div className="min-h-screen">
+        {/* Hero Banner */}
+        <HeroBanner />
+
+        {/* Category Cards */}
+        <CategoryCards />
+
+        {/* Trending/Deals Section */}
+        <TrendingSection />
+
+        {/* Offers Carousel */}
+        <OffersCarousel />
+
+        {/* Recommended Products */}
+        <RecommendedProducts />
+      </div>
+    );
+  }
+
+  // Show product listing for search/category filters
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -141,18 +184,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
-      <section className="relative h-[70vh] flex items-center justify-center bg-gradient-to-b from-neutral-100/30 to-neutral-50">
-        <div className="text-center px-4">
-          <h1 className="font-serif text-5xl md:text-7xl text-neutral-900 mb-6">
-            Timeless Elegance
-          </h1>
-          <p className="text-neutral-600 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
-            Discover a curated collection of luxury clothing that transcends trends and celebrates
-            enduring style.
-          </p>
-        </div>
-      </section>
-
       {searchQuery && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <h2 className="font-serif text-3xl text-neutral-900">
